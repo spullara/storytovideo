@@ -1,11 +1,33 @@
 import { generateObject } from "ai";
-import { google } from "@ai-sdk/google";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import type { StoryAnalysis } from "../types";
 
 // Zod schema for story analysis (without shots)
-// Using z.any() to avoid infinite recursion issues with complex nested types
-const storyAnalysisSchema = z.any();
+const sceneSchema = z.object({
+  sceneNumber: z.number(),
+  title: z.string(),
+  narrativeSummary: z.string(),
+  charactersPresent: z.array(z.string()),
+  location: z.string(),
+  estimatedDurationSeconds: z.number(),
+});
+
+const storyAnalysisSchema = z.object({
+  title: z.string(),
+  artStyle: z.string(),
+  characters: z.array(z.object({
+    name: z.string(),
+    physicalDescription: z.string(),
+    personality: z.string(),
+    ageRange: z.string(),
+  })),
+  locations: z.array(z.object({
+    name: z.string(),
+    visualDescription: z.string(),
+  })),
+  scenes: z.array(sceneSchema),
+});
 
 /**
  * Analyzes a story to extract characters, locations, art style, and scenes.
@@ -26,15 +48,29 @@ Estimate scene duration based on action density and dialogue length.
 Story:
 ${storyText}`;
 
-  // @ts-ignore - Zod schema type inference issue with generateObject
-  const { object } = await generateObject({
-    model: google("gemini-2.5-flash"),
-    schema: storyAnalysisSchema,
-    prompt,
-  });
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY environment variable is not set");
+    }
 
-  // Cast to StoryAnalysis (scenes won't have shots yet)
-  return object as StoryAnalysis;
+    const google = createGoogleGenerativeAI({ apiKey });
+    const { object } = await generateObject({
+      model: google("gemini-2.5-flash"),
+      schema: storyAnalysisSchema,
+      prompt,
+    } as any);
+
+    const result = object as any;
+    // Add empty shots arrays (filled by shot planner later)
+    if (result.scenes) {
+      result.scenes = result.scenes.map((s: any) => ({ ...s, shots: [] }));
+    }
+    return result as StoryAnalysis;
+  } catch (error) {
+    console.error("Error in analyzeStory:", error);
+    throw error;
+  }
 }
 
 /**

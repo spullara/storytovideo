@@ -1,11 +1,32 @@
 import { generateObject } from "ai";
-import { google } from "@ai-sdk/google";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import type { StoryAnalysis, Shot } from "../types";
 
 // Zod schema for shots array
-// Using z.any() to avoid infinite recursion issues with complex nested types
-const shotsSchema = z.any();
+const shotSchema = z.object({
+  shotNumber: z.number(),
+  sceneNumber: z.number(),
+  shotInScene: z.number(),
+  durationSeconds: z.enum(["4", "6", "8"]).transform(v => parseInt(v)),
+  shotType: z.enum(["first_last_frame", "extension"]),
+  composition: z.string(),
+  startFramePrompt: z.string(),
+  endFramePrompt: z.string(),
+  actionPrompt: z.string(),
+  dialogue: z.string(),
+  soundEffects: z.string(),
+  cameraDirection: z.string(),
+  charactersPresent: z.array(z.string()),
+  location: z.string(),
+});
+
+const sceneShotsSchema = z.object({
+  scenes: z.array(z.object({
+    sceneNumber: z.number(),
+    shots: z.array(shotSchema),
+  })),
+});
 
 /**
  * Plans shots for each scene with cinematic composition and dialogue pacing.
@@ -63,26 +84,37 @@ For each scene:
 
 Return a JSON object with scenes array, where each scene has a shots array with all required fields.`;
 
-  // @ts-ignore - Zod schema type inference issue with generateObject
-  const { object } = await generateObject({
-    model: google("gemini-2.5-flash"),
-    schema: shotsSchema,
-    prompt,
-  });
-
-  // Merge shots back into analysis
-  const updatedAnalysis = JSON.parse(JSON.stringify(analysis)) as StoryAnalysis;
-
-  for (const sceneWithShots of object.scenes) {
-    const sceneIndex = updatedAnalysis.scenes.findIndex(
-      (s) => s.sceneNumber === sceneWithShots.sceneNumber
-    );
-    if (sceneIndex >= 0) {
-      updatedAnalysis.scenes[sceneIndex].shots = sceneWithShots.shots as Shot[];
-    }
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY environment variable is not set");
   }
 
-  return updatedAnalysis;
+  try {
+    const google = createGoogleGenerativeAI({ apiKey });
+    const { object } = await generateObject({
+      model: google("gemini-2.5-flash"),
+      schema: sceneShotsSchema,
+      prompt,
+    } as any);
+
+    // Merge shots back into analysis
+    const updatedAnalysis = JSON.parse(JSON.stringify(analysis)) as StoryAnalysis;
+    const result = object as any;
+
+    for (const sceneWithShots of result.scenes) {
+      const sceneIndex = updatedAnalysis.scenes.findIndex(
+        (s) => s.sceneNumber === sceneWithShots.sceneNumber
+      );
+      if (sceneIndex >= 0) {
+        updatedAnalysis.scenes[sceneIndex].shots = sceneWithShots.shots as Shot[];
+      }
+    }
+
+    return updatedAnalysis;
+  } catch (error) {
+    console.error("Error in planShots:", error);
+    throw error;
+  }
 }
 
 /**

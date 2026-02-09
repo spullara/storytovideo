@@ -1,5 +1,5 @@
 import { generateObject } from "ai";
-import { google } from "@ai-sdk/google";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import { readFileSync } from "fs";
 import { extname } from "path";
@@ -54,7 +54,12 @@ export async function verifyOutput(params: {
   const mimeType = isImage ? (fileExt === ".png" ? "image/png" : "image/jpeg") : "video/mp4";
 
   try {
-    // @ts-ignore - Vercel AI SDK type compatibility
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY environment variable is not set");
+    }
+
+    const google = createGoogleGenerativeAI({ apiKey });
     const { object } = await generateObject({
       model: google("gemini-2.5-flash"),
       schema: verificationSchema,
@@ -85,9 +90,9 @@ export async function verifyOutput(params: {
           ],
         },
       ],
-    });
+    } as any);
 
-    return object as VerificationResult;
+    return object as any as VerificationResult;
   } catch (error) {
     console.error("Verification failed:", error);
     return {
