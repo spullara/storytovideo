@@ -15,30 +15,15 @@ async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pollOperation(operationName: string, maxWaitMs: number = 600000) {
-  const startTime = Date.now();
-  while (Date.now() - startTime < maxWaitMs) {
-    try {
-      const operation = await client.operations.get({ name: operationName } as any);
-      console.log(`[Poll] Status: ${(operation as any).done ? 'DONE' : 'IN_PROGRESS'}`);
-      if ((operation as any).done) {
-        return operation;
-      }
-    } catch (err) {
-      console.error(`[Poll Error]`, err);
-    }
-    await sleep(10000); // Poll every 10 seconds
-  }
-  throw new Error(`Operation ${operationName} did not complete within ${maxWaitMs}ms`);
-}
+
 
 async function test1TextToVideo() {
   console.log('\n=== TEST 1: Simple Text-to-Video ===');
   try {
     const prompt = 'A slow cinematic pan across a beautiful mountain landscape at sunset, golden light, peaceful atmosphere';
-    
+
     console.log(`[Test1] Calling generateVideos with prompt: "${prompt}"`);
-    const operation = await client.models.generateVideos({
+    let operation = await client.models.generateVideos({
       model: 'veo-3.1-generate-preview',
       prompt,
       config: {
@@ -46,27 +31,31 @@ async function test1TextToVideo() {
         durationSeconds: 8,
         aspectRatio: '16:9',
       },
-    } as any);
+    });
 
     console.log(`[Test1] Operation name: ${operation.name}`);
     console.log(`[Test1] Initial done status: ${operation.done}`);
 
-    const completedOp = await pollOperation((operation as any).name!);
+    // Poll using the correct SDK method
+    while (!operation.done) {
+      console.log('[Test1] Waiting 10s...');
+      await sleep(10000);
+      operation = await client.operations.getVideosOperation({ operation });
+      console.log(`[Test1] Poll status: done=${operation.done}`);
+    }
 
-    const response = (completedOp as any).response;
-    if (response?.generatedVideos?.[0]?.video) {
-      const videoFile = response.generatedVideos[0].video;
-      console.log(`[Test1] Video generated: ${videoFile.uri || videoFile.mimeType}`);
-
-      // Download the video
+    // Access the response
+    const generatedVideo = operation.response?.generatedVideos?.[0];
+    if (generatedVideo?.video) {
+      console.log(`[Test1] Video URI: ${generatedVideo.video.uri}`);
       const downloadPath = join(outputDir, 'test1_text_to_video.mp4');
       await client.files.download({
-        file: videoFile,
+        file: generatedVideo.video,
         downloadPath,
       });
       console.log(`[Test1] ✅ Downloaded to ${downloadPath}`);
     } else {
-      console.error('[Test1] ❌ No video in response:', response);
+      console.error('[Test1] ❌ No video in response:', JSON.stringify(operation.response, null, 2));
     }
   } catch (err: any) {
     console.error('[Test1] ❌ Error:', err.message);
@@ -103,7 +92,7 @@ async function test2Interpolation() {
     const prompt = 'Smooth transition between the two frames, maintaining visual continuity';
 
     console.log(`[Test2] Calling generateVideos with interpolation`);
-    const operation = await client.models.generateVideos({
+    let operation = await client.models.generateVideos({
       model: 'veo-3.1-generate-preview',
       prompt,
       image: {
@@ -118,22 +107,27 @@ async function test2Interpolation() {
         durationSeconds: 8,
         aspectRatio: '16:9',
       },
-    } as any);
+    });
 
-    console.log(`[Test2] Operation name: ${(operation as any).name}`);
-    const completedOp = await pollOperation((operation as any).name!);
+    console.log(`[Test2] Operation name: ${operation.name}`);
 
-    const response = (completedOp as any).response;
-    if (response?.generatedVideos?.[0]?.video) {
-      const videoFile = response.generatedVideos[0].video;
+    while (!operation.done) {
+      console.log('[Test2] Waiting 10s...');
+      await sleep(10000);
+      operation = await client.operations.getVideosOperation({ operation });
+      console.log(`[Test2] Poll status: done=${operation.done}`);
+    }
+
+    const generatedVideo = operation.response?.generatedVideos?.[0];
+    if (generatedVideo?.video) {
       const downloadPath = join(outputDir, 'test2_interpolation.mp4');
       await client.files.download({
-        file: videoFile,
+        file: generatedVideo.video,
         downloadPath,
       });
       console.log(`[Test2] ✅ Downloaded to ${downloadPath}`);
     } else {
-      console.error('[Test2] ❌ No video in response:', response);
+      console.error('[Test2] ❌ No video in response:', JSON.stringify(operation.response, null, 2));
     }
   } catch (err: any) {
     console.error('[Test2] ❌ Error:', err.message);
