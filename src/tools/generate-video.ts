@@ -36,7 +36,6 @@ export async function generateVideo(params: {
     startFramePath,
     endFramePath,
     previousVideoPath,
-    referenceImagePaths,
     outputDir,
     dryRun = false,
   } = params;
@@ -88,28 +87,15 @@ export async function generateVideo(params: {
         mimeType: "image/png",
       };
 
-      // Build config with optional reference images
+      // Build config
       // Note: Interpolation requires durationSeconds: 8 for 1080p+ per API docs
+      // Note: referenceImages is NOT supported with first_last_frame mode (API constraint)
       const config: Record<string, unknown> = {
         durationSeconds: 8,
         aspectRatio: "16:9",
       };
 
-      if (referenceImagePaths && referenceImagePaths.length > 0) {
-        const refImages = referenceImagePaths.slice(0, 3).map((path) => {
-          const buffer = readFileSync(path);
-          return {
-            image: {
-              imageBytes: buffer.toString("base64"),
-              mimeType: "image/png",
-            },
-            referenceType: "STYLE",
-          };
-        });
-        config.referenceImages = refImages;
-      }
-
-      console.log(`[generateVideo] Config: ${JSON.stringify(config)}`);
+      console.log(`[generateVideo] Config: durationSeconds=${config.durationSeconds}, aspectRatio=${config.aspectRatio}`);
 
       operation = await client.models.generateVideos({
         model: "veo-3.1-generate-preview",
