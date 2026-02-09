@@ -120,7 +120,6 @@ export async function generateVideo(params: {
           const videoBuffer = readFileSync(previousVideoPath);
           const previousVideo = {
             videoBytes: videoBuffer.toString("base64"),
-            mimeType: "video/mp4",
           };
 
           operation = await client.models.generateVideos({
