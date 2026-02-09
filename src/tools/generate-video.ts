@@ -64,95 +64,115 @@ export async function generateVideo(params: {
 
   try {
     const client = getGoogleClient();
+    const maxRetries = 5;
+    let lastError: unknown;
 
-    // Build parameters based on shot type
-    let operation;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Build parameters based on shot type
+        let operation;
 
-    if (shotType === "first_last_frame") {
-      // Mode 1: First+last frame interpolation
-      if (!startFramePath || !endFramePath) {
-        throw new Error("first_last_frame requires both startFramePath and endFramePath");
+        if (shotType === "first_last_frame") {
+          // Mode 1: First+last frame interpolation
+          if (!startFramePath || !endFramePath) {
+            throw new Error("first_last_frame requires both startFramePath and endFramePath");
+          }
+
+          // Load images as base64
+          const startImageBuffer = readFileSync(startFramePath);
+          const startImage = {
+            imageBytes: startImageBuffer.toString("base64"),
+            mimeType: "image/png",
+          };
+
+          const endImageBuffer = readFileSync(endFramePath);
+          const endImage = {
+            imageBytes: endImageBuffer.toString("base64"),
+            mimeType: "image/png",
+          };
+
+          // Build config
+          // Note: Interpolation requires durationSeconds: 8 for 1080p+ per API docs
+          // Note: referenceImages is NOT supported with first_last_frame mode (API constraint)
+          const config: Record<string, unknown> = {
+            durationSeconds: 8,
+            aspectRatio: "16:9",
+          };
+
+          console.log(`[generateVideo] Config: durationSeconds=${config.durationSeconds}, aspectRatio=${config.aspectRatio}`);
+
+          operation = await client.models.generateVideos({
+            model: "veo-3.1-generate-preview",
+            prompt: videoPrompt,
+            image: startImage,
+            config: {
+              ...config,
+              lastFrame: endImage,
+            } as any,
+          });
+        } else {
+          // Mode 2: Scene extension
+          if (!previousVideoPath) {
+            throw new Error("extension requires previousVideoPath");
+          }
+
+          // Load video as base64
+          const videoBuffer = readFileSync(previousVideoPath);
+          const previousVideo = {
+            videoBytes: videoBuffer.toString("base64"),
+            mimeType: "video/mp4",
+          };
+
+          operation = await client.models.generateVideos({
+            model: "veo-3.1-generate-preview",
+            prompt: videoPrompt,
+            video: previousVideo,
+            config: {
+              durationSeconds: 8,
+              resolution: "720p",
+            } as any,
+          });
+        }
+
+        // Poll for operation completion
+        console.log(`[generateVideo] Polling for completion (operation: ${operation.name})`);
+
+        while (!operation.done) {
+          await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait 10 seconds between polls
+          operation = await client.operations.getVideosOperation({ operation });
+        }
+
+        // Extract generated video from response
+        const generatedVideo = operation.response?.generatedVideos?.[0];
+        if (!generatedVideo?.video) {
+          throw new Error(`No video in response for shot ${shotNumber}`);
+        }
+
+        // Download the video to disk
+        console.log(`[generateVideo] Downloading video for shot ${shotNumber}`);
+        await client.files.download({
+          file: generatedVideo.video,
+          downloadPath: outputPath,
+        });
+
+        console.log(`[generateVideo] Shot ${shotNumber} saved to ${outputPath}`);
+        return { shotNumber, path: outputPath, duration: durationSeconds };
+      } catch (error: any) {
+        lastError = error;
+        // Check if it's a 429 rate limit error
+        if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
+          console.warn(`[generateVideo] Shot ${shotNumber}: Rate limited (429). Waiting 60s before retry ${attempt}/${maxRetries}...`);
+          await new Promise((resolve) => setTimeout(resolve, 60000));
+          continue;
+        }
+        // Non-429 error: don't retry
+        throw error;
       }
-
-      // Load images as base64
-      const startImageBuffer = readFileSync(startFramePath);
-      const startImage = {
-        imageBytes: startImageBuffer.toString("base64"),
-        mimeType: "image/png",
-      };
-
-      const endImageBuffer = readFileSync(endFramePath);
-      const endImage = {
-        imageBytes: endImageBuffer.toString("base64"),
-        mimeType: "image/png",
-      };
-
-      // Build config
-      // Note: Interpolation requires durationSeconds: 8 for 1080p+ per API docs
-      // Note: referenceImages is NOT supported with first_last_frame mode (API constraint)
-      const config: Record<string, unknown> = {
-        durationSeconds: 8,
-        aspectRatio: "16:9",
-      };
-
-      console.log(`[generateVideo] Config: durationSeconds=${config.durationSeconds}, aspectRatio=${config.aspectRatio}`);
-
-      operation = await client.models.generateVideos({
-        model: "veo-3.1-generate-preview",
-        prompt: videoPrompt,
-        image: startImage,
-        config: {
-          ...config,
-          lastFrame: endImage,
-        } as any,
-      });
-    } else {
-      // Mode 2: Scene extension
-      if (!previousVideoPath) {
-        throw new Error("extension requires previousVideoPath");
-      }
-
-      // Load video as base64
-      const videoBuffer = readFileSync(previousVideoPath);
-      const previousVideo = {
-        videoBytes: videoBuffer.toString("base64"),
-        mimeType: "video/mp4",
-      };
-
-      operation = await client.models.generateVideos({
-        model: "veo-3.1-generate-preview",
-        prompt: videoPrompt,
-        video: previousVideo,
-        config: {
-          durationSeconds: 8,
-          resolution: "720p",
-        } as any,
-      });
     }
 
-    // Poll for operation completion
-    console.log(`[generateVideo] Polling for completion (operation: ${operation.name})`);
-
-    while (!operation.done) {
-      await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait 10 seconds between polls
-      operation = await client.operations.getVideosOperation({ operation });
-    }
-
-    // Extract generated video from response
-    const generatedVideo = operation.response?.generatedVideos?.[0];
-    if (!generatedVideo?.video) {
-      throw new Error(`No video in response for shot ${shotNumber}`);
-    }
-
-    // Download the video to disk
-    console.log(`[generateVideo] Downloading video for shot ${shotNumber}`);
-    await client.files.download({
-      file: generatedVideo.video,
-      downloadPath: outputPath,
-    });
-
-    console.log(`[generateVideo] Shot ${shotNumber} saved to ${outputPath}`);
-    return { shotNumber, path: outputPath, duration: durationSeconds };
+    // All retries exhausted
+    console.error(`[generateVideo] Shot ${shotNumber}: All ${maxRetries} retries exhausted`);
+    throw lastError;
   } catch (error) {
     console.error(`[generateVideo] Error generating shot ${shotNumber}:`, error);
     throw error;
