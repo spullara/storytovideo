@@ -74,7 +74,21 @@ export const saveStateTool = {
   description:
     "Save the pipeline state to a JSON file and create output directory structure",
   parameters: z.object({
-    state: z.any(), // PipelineState is complex, use any to avoid schema issues
+    state: z.object({
+      storyFile: z.string(),
+      outputDir: z.string(),
+      currentStage: z.string(),
+      completedStages: z.array(z.string()),
+      storyAnalysis: z.any().nullable().describe("StoryAnalysis object or null"),
+      assetLibrary: z.any().nullable().describe("AssetLibrary object or null"),
+      generatedAssets: z.record(z.string(), z.string()),
+      generatedFrames: z.record(z.string(), z.object({ start: z.string().optional(), end: z.string().optional() })),
+      generatedVideos: z.record(z.string(), z.string()),
+      errors: z.array(z.object({ stage: z.string(), shot: z.number().optional(), error: z.string(), timestamp: z.string() })),
+      verifications: z.array(z.object({ stage: z.string(), shot: z.number().optional(), passed: z.boolean(), score: z.number(), issues: z.array(z.string()), timestamp: z.string() })),
+      interrupted: z.boolean(),
+      lastSavedAt: z.string(),
+    }).describe("Full pipeline state to save"),
   }),
 };
 

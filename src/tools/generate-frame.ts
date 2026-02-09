@@ -246,11 +246,27 @@ export const generateFrameTool = {
   description:
     "Generate start and end keyframe images for a shot using Nano Banana (gemini-2.5-flash-image). For first_last_frame shots, generates both frames. For extension shots, returns immediately without generating frames.",
   parameters: z.object({
-    shot: z.any(), // Shot type - using z.any() to avoid circular type issues
+    shot: z.object({
+      shotNumber: z.number(),
+      sceneNumber: z.number(),
+      shotInScene: z.number(),
+      durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]),
+      shotType: z.enum(["first_last_frame", "extension"]),
+      composition: z.string(),
+      startFramePrompt: z.string(),
+      endFramePrompt: z.string(),
+      actionPrompt: z.string(),
+      dialogue: z.string(),
+      soundEffects: z.string(),
+      cameraDirection: z.string(),
+      charactersPresent: z.array(z.string()),
+      location: z.string(),
+    }).describe("The shot to generate keyframes for"),
     artStyle: z.string().describe("The visual art style for the entire video"),
-    assetLibrary: z.any().describe(
-      "AssetLibrary with character and location reference image paths"
-    ),
+    assetLibrary: z.object({
+      characterImages: z.record(z.string(), z.object({ front: z.string(), angle: z.string() })),
+      locationImages: z.record(z.string(), z.string()),
+    }).describe("AssetLibrary with character and location reference image paths"),
     outputDir: z.string().describe("Output directory for saving frame images"),
     dryRun: z
       .boolean()

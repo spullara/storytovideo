@@ -124,7 +124,29 @@ Return a JSON object with scenes array, where each scene has a shots array with 
 export const planShotsTool = {
   description: "Plan cinematic shots for each scene with composition and dialogue pacing",
   parameters: z.object({
-    analysis: z.any(),
+    analysis: z.object({
+      title: z.string(),
+      artStyle: z.string(),
+      characters: z.array(z.object({
+        name: z.string(),
+        physicalDescription: z.string(),
+        personality: z.string(),
+        ageRange: z.string(),
+      })),
+      locations: z.array(z.object({
+        name: z.string(),
+        visualDescription: z.string(),
+      })),
+      scenes: z.array(z.object({
+        sceneNumber: z.number(),
+        title: z.string(),
+        narrativeSummary: z.string(),
+        charactersPresent: z.array(z.string()),
+        location: z.string(),
+        estimatedDurationSeconds: z.number(),
+        shots: z.array(z.any()), // shots are filled later
+      })),
+    }).describe("The story analysis result from analyzeStory"),
   }),
 };
 
