@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { GoogleGenAI } from '@google/genai';
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 
 const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -75,7 +75,7 @@ async function test2Interpolation() {
       return;
     }
 
-    const files = require('fs').readdirSync(framesDir).filter((f: string) => f.endsWith('.png'));
+    const files = readdirSync(framesDir).filter((f: string) => f.endsWith('.png'));
     if (files.length < 2) {
       console.log(`[Test2] ⚠️  Found only ${files.length} frame images. Need at least 2 for interpolation.`);
       return;
