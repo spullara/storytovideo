@@ -6,21 +6,18 @@ import { getGoogleClient } from "../google-client";
 
 /**
  * Generates video clips for shots using Veo 3.1 via @google/genai SDK.
- * Supports two modes:
- * 1. first_last_frame: Interpolates between start and end frame images
- * 2. extension: Extends previous video with seamless continuation
+ * Uses first+last frame interpolation to generate each shot.
  */
 export async function generateVideo(params: {
   shotNumber: number;
-  shotType: "first_last_frame" | "extension";
+  shotType: "first_last_frame";
   actionPrompt: string;
   dialogue: string;
   soundEffects: string;
   cameraDirection: string;
   durationSeconds: 4 | 6 | 8;
-  startFramePath?: string;
-  endFramePath?: string;
-  previousVideoPath?: string;
+  startFramePath: string;
+  endFramePath: string;
   referenceImagePaths?: string[];
   outputDir: string;
   dryRun?: boolean;
@@ -35,7 +32,6 @@ export async function generateVideo(params: {
     durationSeconds,
     startFramePath,
     endFramePath,
-    previousVideoPath,
     outputDir,
     dryRun = false,
   } = params;
@@ -69,69 +65,43 @@ export async function generateVideo(params: {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // Build parameters based on shot type
-        let operation;
-
-        if (shotType === "first_last_frame") {
-          // Mode 1: First+last frame interpolation
-          if (!startFramePath || !endFramePath) {
-            throw new Error("first_last_frame requires both startFramePath and endFramePath");
-          }
-
-          // Load images as base64
-          const startImageBuffer = readFileSync(startFramePath);
-          const startImage = {
-            imageBytes: startImageBuffer.toString("base64"),
-            mimeType: "image/png",
-          };
-
-          const endImageBuffer = readFileSync(endFramePath);
-          const endImage = {
-            imageBytes: endImageBuffer.toString("base64"),
-            mimeType: "image/png",
-          };
-
-          // Build config
-          // Note: Interpolation requires durationSeconds: 8 for 1080p+ per API docs
-          // Note: referenceImages is NOT supported with first_last_frame mode (API constraint)
-          const config: Record<string, unknown> = {
-            durationSeconds: 8,
-            aspectRatio: "16:9",
-          };
-
-          console.log(`[generateVideo] Config: durationSeconds=${config.durationSeconds}, aspectRatio=${config.aspectRatio}`);
-
-          operation = await client.models.generateVideos({
-            model: "veo-3.1-generate-preview",
-            prompt: videoPrompt,
-            image: startImage,
-            config: {
-              ...config,
-              lastFrame: endImage,
-            } as any,
-          });
-        } else {
-          // Mode 2: Scene extension
-          if (!previousVideoPath) {
-            throw new Error("extension requires previousVideoPath");
-          }
-
-          // Load video as base64
-          const videoBuffer = readFileSync(previousVideoPath);
-          const previousVideo = {
-            videoBytes: videoBuffer.toString("base64"),
-          };
-
-          operation = await client.models.generateVideos({
-            model: "veo-3.1-generate-preview",
-            prompt: videoPrompt,
-            video: previousVideo,
-            config: {
-              durationSeconds: 8,
-              resolution: "720p",
-            } as any,
-          });
+        // First+last frame interpolation
+        if (!startFramePath || !endFramePath) {
+          throw new Error("first_last_frame requires both startFramePath and endFramePath");
         }
+
+        // Load images as base64
+        const startImageBuffer = readFileSync(startFramePath);
+        const startImage = {
+          imageBytes: startImageBuffer.toString("base64"),
+          mimeType: "image/png",
+        };
+
+        const endImageBuffer = readFileSync(endFramePath);
+        const endImage = {
+          imageBytes: endImageBuffer.toString("base64"),
+          mimeType: "image/png",
+        };
+
+        // Build config
+        // Note: Interpolation requires durationSeconds: 8 for 1080p+ per API docs
+        // Note: referenceImages is NOT supported with first_last_frame mode (API constraint)
+        const config: Record<string, unknown> = {
+          durationSeconds: 8,
+          aspectRatio: "16:9",
+        };
+
+        console.log(`[generateVideo] Config: durationSeconds=${config.durationSeconds}, aspectRatio=${config.aspectRatio}`);
+
+        let operation = await client.models.generateVideos({
+          model: "veo-3.1-generate-preview",
+          prompt: videoPrompt,
+          image: startImage,
+          config: {
+            ...config,
+            lastFrame: endImage,
+          } as any,
+        });
 
         // Poll for operation completion
         console.log(`[generateVideo] Polling for completion (operation: ${operation.name})`);
@@ -196,18 +166,17 @@ export async function generateVideo(params: {
  */
 export const generateVideoTool = {
   description:
-    "Generate video clips for shots using Veo 3.1. Supports first+last frame interpolation or scene extension.",
+    "Generate video clips for shots using Veo 3.1. Uses first+last frame interpolation to generate each shot.",
   parameters: z.object({
     shotNumber: z.number().describe("Global shot number"),
-    shotType: z.enum(["first_last_frame", "extension"]).describe("Video generation mode"),
+    shotType: z.literal("first_last_frame").describe("Video generation mode"),
     actionPrompt: z.string().describe("Action description for the shot"),
     dialogue: z.string().describe("Character dialogue (empty if none)"),
     soundEffects: z.string().describe("Sound effects description"),
     cameraDirection: z.string().describe("Camera movement and angle"),
     durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]).describe("Video duration in seconds"),
-    startFramePath: z.string().optional().describe("Path to start frame image (first_last_frame only)"),
-    endFramePath: z.string().optional().describe("Path to end frame image (first_last_frame only)"),
-    previousVideoPath: z.string().optional().describe("Path to previous video (extension only)"),
+    startFramePath: z.string().describe("Path to start frame image"),
+    endFramePath: z.string().describe("Path to end frame image"),
     referenceImagePaths: z.array(z.string()).optional().describe("Paths to reference images (up to 3)"),
     outputDir: z.string().describe("Output directory for video file"),
     dryRun: z.boolean().optional().describe("Return placeholder without calling API"),

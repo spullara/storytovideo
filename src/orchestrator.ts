@@ -328,10 +328,9 @@ async function runFrameGenerationStage(
 
   const analysis = state.storyAnalysis;
   const allShots = analysis.scenes.flatMap((s) => s.shots || []);
-  const flfShots = allShots.filter((s) => s.shotType === "first_last_frame");
 
-  // Determine which frames still need generation
-  const neededFrames = flfShots.filter((s) => {
+  // Determine which frames still need generation (all shots use first_last_frame)
+  const neededFrames = allShots.filter((s) => {
     const existing = state.generatedFrames[s.shotNumber];
     return !existing || !existing.start || !existing.end;
   });
@@ -344,15 +343,15 @@ async function runFrameGenerationStage(
   }
 
   const stateJson = compactState(state);
-  const systemPrompt = `You are a frame generation agent. Generate start and end keyframe images for first_last_frame shots.
+  const systemPrompt = `You are a frame generation agent. Generate start and end keyframe images for all shots.
 
 Current pipeline state:
 ${stateJson}
 
-For each first_last_frame shot that doesn't already have frames in state.generatedFrames, call generateFrame with the shot data, art style, and asset library.
+For each shot that doesn't already have frames in state.generatedFrames, call generateFrame with the shot data, art style, and asset library.
 
 IMPORTANT:
-- Only generate frames for shots with shotType "first_last_frame".
+- All shots use first_last_frame generation and need keyframes.
 - Check state.generatedFrames[shotNumber] before generating — skip if start and end already exist.
 - After EACH successful generation, call saveState to checkpoint progress.
 - Pass dryRun=${options.dryRun} to generateFrame.
@@ -441,7 +440,7 @@ async function runVideoGenerationStage(
   }
 
   const stateJson = compactState(state);
-  const systemPrompt = `You are a video generation agent. Generate video clips for each shot.
+  const systemPrompt = `You are a video generation agent. Generate video clips for each shot using first+last frame interpolation.
 
 Current pipeline state:
 ${stateJson}
@@ -451,8 +450,8 @@ Generate video clips ONE AT A TIME. Call generateVideo for ONE shot, wait for th
 CRITICAL: You MUST only call generateVideo ONCE per response. After each call completes, call saveState, then call generateVideo for the next shot. NEVER call generateVideo multiple times in the same response.
 
 For each shot:
-- For first_last_frame shots: provide startFramePath and endFramePath from state.generatedFrames
-- For extension shots: provide previousVideoPath from the previous shot's generated video
+- Provide startFramePath and endFramePath from state.generatedFrames
+- All shots use first_last_frame generation with start and end keyframes
 
 Rules:
 - Generate ONE video per step. Do NOT batch multiple generateVideo calls.
@@ -460,9 +459,9 @@ Rules:
 - After EACH successful generation, call saveState to checkpoint progress.
 - Pass dryRun=${options.dryRun} to generateVideo.
 - Use outputDir="${join(options.outputDir, "videos")}" for all videos.
-- Process shots in order (by shotNumber) since extension shots depend on previous shots.
+- Process shots in order (by shotNumber).
 
-Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber} (${s.shotType})`).join(", ")}`;
+Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", ")}`;
 
   const userPrompt = `Generate video clips for ${neededVideos.length} shots. Process them in order by shot number.`;
 

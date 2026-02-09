@@ -9,7 +9,7 @@ const shotSchema = z.object({
   sceneNumber: z.number(),
   shotInScene: z.number(),
   durationSeconds: z.enum(["4", "6", "8"]).transform(v => parseInt(v)),
-  shotType: z.enum(["first_last_frame", "extension"]),
+  shotType: z.literal("first_last_frame"),
   composition: z.string(),
   startFramePrompt: z.string(),
   endFramePrompt: z.string(),
@@ -46,7 +46,7 @@ Dialogue Scenes:
 Action/Establishing Scenes:
 - wide_establishing: Full location, characters small. First shot of new location.
 - medium_shot: Waist up, action with body language.
-- tracking: Camera follows movement. Use extension type for seamless continuation.
+- tracking: Camera follows movement. Use first_last_frame with start/end keyframes showing the movement arc.
 - low_angle / high_angle: Power dynamics, drama.
 - pov: Camera sees what character sees.
 
@@ -77,7 +77,7 @@ For each scene:
 1. Break into shots (each 4, 6, or 8 seconds)
 2. Assign cinematic composition types (use underscore format: wide_establishing, over_the_shoulder, etc.)
 3. Distribute dialogue across shots respecting pacing rules
-4. Choose generation strategy (first_last_frame for composition changes, extension for continuity)
+4. All shots use first_last_frame generation strategy
 5. Write detailed frame prompts that include the composition type
 6. Write action prompts for video generation
 7. Include dialogue as quoted speech if present

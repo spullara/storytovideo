@@ -18,16 +18,6 @@ export async function generateFrame(params: {
 }): Promise<{ shotNumber: number; startPath?: string; endPath?: string }> {
   const { shot, artStyle, assetLibrary, outputDir, dryRun = false } = params;
 
-  // Extension shots don't need frames
-  if (shot.shotType === "extension") {
-    return { shotNumber: shot.shotNumber };
-  }
-
-  // Only first_last_frame shots need frame generation
-  if (shot.shotType !== "first_last_frame") {
-    return { shotNumber: shot.shotNumber };
-  }
-
   // Create frames directory if it doesn't exist
   const framesDir = path.join(outputDir, "frames");
   if (!dryRun && !fs.existsSync(framesDir)) {
@@ -244,14 +234,14 @@ Aspect ratio: 16:9`;
  */
 export const generateFrameTool = {
   description:
-    "Generate start and end keyframe images for a shot using Nano Banana (gemini-2.5-flash-image). For first_last_frame shots, generates both frames. For extension shots, returns immediately without generating frames.",
+    "Generate start and end keyframe images for a shot using Nano Banana (gemini-2.5-flash-image).",
   parameters: z.object({
     shot: z.object({
       shotNumber: z.number(),
       sceneNumber: z.number(),
       shotInScene: z.number(),
       durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]),
-      shotType: z.enum(["first_last_frame", "extension"]),
+      shotType: z.literal("first_last_frame"),
       composition: z.string(),
       startFramePrompt: z.string(),
       endFramePrompt: z.string(),
