@@ -101,19 +101,7 @@ program
         }
       }
 
-      // Handle --skip-to: load state and set current stage
-      if (pipelineOptions.skipTo) {
-        const savedState = loadState(pipelineOptions.outputDir);
-        if (savedState) {
-          console.log(`Skipping to stage: ${pipelineOptions.skipTo}`);
-          currentState = savedState;
-          currentState.currentStage = pipelineOptions.skipTo;
-        } else {
-          console.warn(
-            "No saved state found for --skip-to. Starting fresh pipeline."
-          );
-        }
-      }
+      // --skip-to is handled in orchestrator.ts runPipeline()
 
       // Import and call the orchestrator (will be created in Wave 4)
       // For now, this is a placeholder that will be filled in when orchestrator.ts exists
