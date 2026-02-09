@@ -54,16 +54,13 @@ export async function generateAsset(params: {
   }
 
   // Build the prompt
-  let prompt = `Generate a ${artStyle} style reference image of `;
-  if (assetType === "character") {
-    prompt += `a character: ${description}`;
-  } else {
-    prompt += `a location: ${description}`;
-  }
+  let prompt: string;
+  let isEditing = false;
 
   // Prepare image input parts if reference image provided
   const imageParts: any[] = [];
   if (referenceImagePath && fs.existsSync(referenceImagePath)) {
+    isEditing = true;
     const imageData = fs.readFileSync(referenceImagePath);
     const base64Image = imageData.toString("base64");
     imageParts.push({
@@ -72,7 +69,28 @@ export async function generateAsset(params: {
         data: base64Image,
       },
     });
-    prompt += " (angle shot, maintain consistency with the reference image provided)";
+
+    // Image editing prompt for consistency
+    if (assetType === "character") {
+      prompt = `Edit this image to show the same character from a different angle/perspective. Keep their exact appearance, clothing, facial features, body proportions, and color palette identical. Only change the viewing angle to a 3/4 perspective. Character details: ${description}`;
+    } else {
+      prompt = `Edit this image to show the same location from a different vantage point. Keep the exact same architecture, lighting, color palette, and atmosphere. Location details: ${description}`;
+    }
+  } else {
+    // Generate new image
+    prompt = `Generate a ${artStyle} style reference image of `;
+    if (assetType === "character") {
+      prompt += `a character: ${description}`;
+    } else {
+      prompt += `a location: ${description}`;
+    }
+  }
+
+  // Log the operation
+  if (isEditing) {
+    console.log(`[generateAsset] Editing reference image for ${assetType}: ${assetName} (${angleType})`);
+  } else {
+    console.log(`[generateAsset] Generating new ${assetType}: ${assetName}`);
   }
 
   // Call Nano Banana API with retry logic
@@ -89,7 +107,7 @@ export async function generateAsset(params: {
           },
         ],
         config: {
-          responseModalities: ["Image"],
+          responseModalities: isEditing ? ["Image", "Text"] : ["Image"],
         } as any,
       });
 
@@ -140,10 +158,12 @@ export async function generateAsset(params: {
 /**
  * Vercel AI SDK tool definition for generateAsset.
  * Claude calls this to generate character and location reference images.
+ * When a referenceImagePath is provided, uses image editing to create variations
+ * while maintaining exact consistency with the reference image.
  */
 export const generateAssetTool = {
   description:
-    "Generate reference images for characters and locations using Nano Banana (gemini-2.5-flash-image)",
+    "Generate reference images for characters and locations using Nano Banana (gemini-2.5-flash-image). When referenceImagePath is provided, edits the reference image to create variations (e.g., different angles) while maintaining exact consistency in appearance, clothing, features, and color palette.",
   parameters: z.object({
     characterName: z.string().optional(),
     locationName: z.string().optional(),
