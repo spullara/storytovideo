@@ -26,3 +26,12 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Test outputs
+test_output/
+
+# Videos
+*.mp4
+
+# Backup files
+*~
