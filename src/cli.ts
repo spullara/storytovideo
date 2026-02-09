@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Command } from "commander";
 import { readFileSync } from "fs";
 import { resolve } from "path";
