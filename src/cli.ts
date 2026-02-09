@@ -2,18 +2,18 @@ import { Command } from "commander";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { loadState } from "./tools/state";
+import { setInterrupted } from "./signals";
 import type { PipelineOptions, PipelineState } from "./types";
 
 const program = new Command();
 
 // Global state for interruption handling
-export let interrupted = false;
 let currentState: PipelineState | null = null;
 
 // SIGINT handler for graceful interruption
 process.on("SIGINT", async () => {
   console.log("\nInterrupted. Saving state...");
-  interrupted = true;
+  setInterrupted(true);
 
   if (currentState) {
     try {

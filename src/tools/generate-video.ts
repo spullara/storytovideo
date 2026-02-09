@@ -120,15 +120,63 @@ export async function generateVideo(params: {
     }
 
     // Call Veo 3.1 API
-    // Note: The actual API call structure depends on @google/genai SDK version
-    // This is a placeholder that demonstrates the intended flow
     console.log(`[generateVideo] Calling Veo 3.1 API for shot ${shotNumber}`);
     console.log(`[generateVideo] Request type: ${shotType}`);
 
-    // For now, create a placeholder video file to allow the pipeline to continue
-    // In production, this would call the actual Veo 3.1 API
-    const placeholderBuffer = Buffer.from("placeholder video data");
-    await writeFile(outputPath, placeholderBuffer);
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY environment variable is not set");
+    }
+
+    // Call Veo 3.1 API via REST endpoint (generateVideos is a long-running operation)
+    const apiUrl = "https://generativelanguage.googleapis.com/v1alpha/models/veo-3.1-generate-preview:generateVideos";
+
+    const generateResponse = await fetch(`${apiUrl}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestPayload),
+    });
+
+    if (!generateResponse.ok) {
+      throw new Error(`Veo 3.1 API error: ${generateResponse.statusText}`);
+    }
+
+    const operationData = await generateResponse.json() as any;
+    let operationName = operationData.name;
+
+    if (!operationName) {
+      throw new Error("No operation name in Veo 3.1 response");
+    }
+
+    // Poll for operation completion
+    console.log(`[generateVideo] Polling for completion (operation: ${operationName})`);
+    const operationsUrl = `https://generativelanguage.googleapis.com/v1alpha/${operationName}`;
+    let operation = operationData;
+
+    while (!operation.done) {
+      await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait 10 seconds between polls
+      const pollResponse = await fetch(`${operationsUrl}?key=${apiKey}`);
+      if (!pollResponse.ok) {
+        throw new Error(`Failed to poll operation: ${pollResponse.statusText}`);
+      }
+      operation = await pollResponse.json();
+    }
+
+    // Extract generated video from response
+    const video = operation.response?.generatedVideos?.[0];
+    if (!video?.video?.uri) {
+      throw new Error(`No video URI in response for shot ${shotNumber}`);
+    }
+
+    // Download the video from the URI
+    console.log(`[generateVideo] Downloading video from ${video.video.uri}`);
+    const response = await fetch(video.video.uri);
+    if (!response.ok) {
+      throw new Error(`Failed to download video: ${response.statusText}`);
+    }
+
+    const videoBuffer = Buffer.from(await response.arrayBuffer());
+    await writeFile(outputPath, videoBuffer);
 
     console.log(`[generateVideo] Shot ${shotNumber} saved to ${outputPath}`);
     return { shotNumber, path: outputPath, duration: durationSeconds };
@@ -152,7 +200,7 @@ export const generateVideoTool = {
     dialogue: z.string().describe("Character dialogue (empty if none)"),
     soundEffects: z.string().describe("Sound effects description"),
     cameraDirection: z.string().describe("Camera movement and angle"),
-    durationSeconds: z.enum(["4", "6", "8"]).describe("Video duration in seconds"),
+    durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]).describe("Video duration in seconds"),
     startFramePath: z.string().optional().describe("Path to start frame image (first_last_frame only)"),
     endFramePath: z.string().optional().describe("Path to end frame image (first_last_frame only)"),
     previousVideoPath: z.string().optional().describe("Path to previous video (extension only)"),
