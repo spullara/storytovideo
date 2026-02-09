@@ -1,11 +1,11 @@
-import { generateText } from "ai";
+import { generateText, stepCountIs } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { writeFileSync } from "fs";
 import { join } from "path";
 
 import type { PipelineOptions, PipelineState, StoryAnalysis } from "./types";
-import { interrupted } from "./cli";
+import { interrupted } from "./signals";
 import { analyzeStory, analyzeStoryTool } from "./tools/analyze-story";
 import { planShots, planShotsTool } from "./tools/plan-shots";
 import { generateAsset, generateAssetTool } from "./tools/generate-asset";
@@ -89,7 +89,7 @@ async function runStage(
     system: systemPrompt,
     prompt: userPrompt,
     tools,
-    maxSteps,
+    stopWhen: stepCountIs(maxSteps),
     onStepFinish: (step: any) => {
       if (verbose) {
         if (step.text) {
@@ -129,7 +129,7 @@ After receiving the analysis, respond with a brief summary of what was found.`;
   const analysisTools = {
     analyzeStory: {
       description: analyzeStoryTool.description,
-      parameters: analyzeStoryTool.parameters,
+      inputSchema: analyzeStoryTool.parameters,
       execute: async (params: z.infer<typeof analyzeStoryTool.parameters>) => {
         const result = await analyzeStory(params.storyText);
         state.storyAnalysis = result;
@@ -173,7 +173,7 @@ After receiving the shot plan, respond with a brief summary of the shots planned
   const shotTools = {
     planShots: {
       description: planShotsTool.description,
-      parameters: planShotsTool.parameters,
+      inputSchema: planShotsTool.parameters,
       execute: async (params: z.infer<typeof planShotsTool.parameters>) => {
         const result = await planShots(params.analysis as StoryAnalysis);
         state.storyAnalysis = result;
@@ -253,7 +253,7 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
   const assetTools: Record<string, any> = {
     generateAsset: {
       description: generateAssetTool.description,
-      parameters: generateAssetTool.parameters,
+      inputSchema: generateAssetTool.parameters,
       execute: async (params: z.infer<typeof generateAssetTool.parameters>) => {
         const result = await generateAsset({
           ...params,
@@ -283,7 +283,7 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
     },
     saveState: {
       description: saveStateTool.description,
-      parameters: saveStateTool.parameters,
+      inputSchema: saveStateTool.parameters,
       execute: async () => {
         return saveState({ state });
       },
@@ -293,7 +293,7 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
   if (options.verify) {
     assetTools.verifyOutput = {
       description: verifyOutputTool.description,
-      parameters: verifyOutputTool.parameters,
+      inputSchema: verifyOutputTool.parameters,
       execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
       },
@@ -359,7 +359,7 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
   const frameTools: Record<string, any> = {
     generateFrame: {
       description: generateFrameTool.description,
-      parameters: generateFrameTool.parameters,
+      inputSchema: generateFrameTool.parameters,
       execute: async (params: z.infer<typeof generateFrameTool.parameters>) => {
         const result = await generateFrame({
           shot: params.shot,
@@ -377,7 +377,7 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
     },
     saveState: {
       description: saveStateTool.description,
-      parameters: saveStateTool.parameters,
+      inputSchema: saveStateTool.parameters,
       execute: async () => {
         return saveState({ state });
       },
@@ -387,7 +387,7 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
   if (options.verify) {
     frameTools.verifyOutput = {
       description: verifyOutputTool.description,
-      parameters: verifyOutputTool.parameters,
+      inputSchema: verifyOutputTool.parameters,
       execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
       },
@@ -452,11 +452,10 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber} (${s.shotT
   const videoTools: Record<string, any> = {
     generateVideo: {
       description: generateVideoTool.description,
-      parameters: generateVideoTool.parameters,
+      inputSchema: generateVideoTool.parameters,
       execute: async (params: z.infer<typeof generateVideoTool.parameters>) => {
         const result = await generateVideo({
           ...params,
-          durationSeconds: parseInt(params.durationSeconds, 10) as 4 | 6 | 8,
           dryRun: options.dryRun,
           outputDir: join(options.outputDir, "videos"),
         });
@@ -466,7 +465,7 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber} (${s.shotT
     },
     saveState: {
       description: saveStateTool.description,
-      parameters: saveStateTool.parameters,
+      inputSchema: saveStateTool.parameters,
       execute: async () => {
         return saveState({ state });
       },
@@ -476,7 +475,7 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber} (${s.shotT
   if (options.verify) {
     videoTools.verifyOutput = {
       description: verifyOutputTool.description,
-      parameters: verifyOutputTool.parameters,
+      inputSchema: verifyOutputTool.parameters,
       execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
       },
@@ -527,7 +526,7 @@ Output directory: "${options.outputDir}"`;
   const assemblyTools = {
     assembleVideo: {
       description: assembleVideoTool.description,
-      parameters: assembleVideoTool.parameters,
+      inputSchema: assembleVideoTool.parameters,
       execute: async (params: z.infer<typeof assembleVideoTool.parameters>) => {
         return assembleVideo({
           ...params,
@@ -537,7 +536,7 @@ Output directory: "${options.outputDir}"`;
     },
     saveState: {
       description: saveStateTool.description,
-      parameters: saveStateTool.parameters,
+      inputSchema: saveStateTool.parameters,
       execute: async () => {
         return saveState({ state });
       },
