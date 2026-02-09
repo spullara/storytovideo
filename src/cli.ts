@@ -1,8 +1,36 @@
 import { Command } from "commander";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { loadState } from "./tools/state";
+import type { PipelineOptions, PipelineState } from "./types";
 
 const program = new Command();
+
+// Global state for interruption handling
+let interrupted = false;
+let currentState: PipelineState | null = null;
+
+// SIGINT handler for graceful interruption
+process.on("SIGINT", async () => {
+  console.log("\nInterrupted. Saving state...");
+  interrupted = true;
+
+  if (currentState) {
+    try {
+      // Set interrupted flag and save state
+      currentState.interrupted = true;
+      const { saveState } = await import("./tools/state");
+      await saveState({ state: currentState });
+      console.log(
+        "Pipeline interrupted. Resume with: storytovideo <story> --resume"
+      );
+    } catch (error) {
+      console.error("Failed to save state during interruption:", error);
+    }
+  }
+
+  process.exit(0);
+});
 
 program
   .name("storytovideo")
@@ -37,7 +65,7 @@ program
         process.exit(1);
       }
 
-      const pipelineOptions = {
+      const pipelineOptions: PipelineOptions = {
         outputDir: options.outputDir,
         dryRun: options.dryRun,
         verify: options.verify,
@@ -59,8 +87,53 @@ program
       console.log(`Verbose: ${pipelineOptions.verbose}`);
       console.log("");
 
-      // TODO: Implement pipeline orchestration
-      console.log("Pipeline setup complete. Ready to process story.");
+      // Handle --resume: load saved state
+      if (pipelineOptions.resume) {
+        const savedState = loadState(pipelineOptions.outputDir);
+        if (savedState) {
+          console.log("Resuming from saved state...");
+          currentState = savedState;
+        } else {
+          console.warn(
+            "No saved state found. Starting fresh pipeline."
+          );
+        }
+      }
+
+      // Handle --skip-to: load state and set current stage
+      if (pipelineOptions.skipTo) {
+        const savedState = loadState(pipelineOptions.outputDir);
+        if (savedState) {
+          console.log(`Skipping to stage: ${pipelineOptions.skipTo}`);
+          currentState = savedState;
+          currentState.currentStage = pipelineOptions.skipTo;
+        } else {
+          console.warn(
+            "No saved state found for --skip-to. Starting fresh pipeline."
+          );
+        }
+      }
+
+      // Import and call the orchestrator (will be created in Wave 4)
+      // For now, this is a placeholder that will be filled in when orchestrator.ts exists
+      try {
+        const { runPipeline } = await import("./orchestrator");
+        await runPipeline(storyText, pipelineOptions);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.includes("Cannot find module")
+        ) {
+          console.error(
+            "Error: orchestrator.ts not yet implemented (Wave 4)"
+          );
+          console.log(
+            "Pipeline setup complete. Orchestrator will be wired in Wave 4."
+          );
+        } else {
+          throw error;
+        }
+      }
     } catch (error) {
       if (error instanceof Error) {
         console.error(`Error: ${error.message}`);
