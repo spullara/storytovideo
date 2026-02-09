@@ -7,7 +7,7 @@ import type { PipelineOptions, PipelineState } from "./types";
 const program = new Command();
 
 // Global state for interruption handling
-let interrupted = false;
+export let interrupted = false;
 let currentState: PipelineState | null = null;
 
 // SIGINT handler for graceful interruption
