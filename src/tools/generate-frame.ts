@@ -166,8 +166,7 @@ async function generateSingleFrame(params: {
     contents,
     config: {
       responseModalities: ["Image"],
-      imageConfig: { aspectRatio: "16:9" },
-    },
+    } as any,
   });
 
   // Extract the generated image from response
@@ -185,12 +184,15 @@ async function generateSingleFrame(params: {
     (part: any) => part.inlineData && part.inlineData.mimeType === "image/png"
   );
 
-  if (!imagePart || !imagePart.inlineData) {
+  if (!imagePart || !imagePart.inlineData || !imagePart.inlineData.data) {
     throw new Error("No image data in response");
   }
 
   // Save the image to disk
-  const imageBuffer = Buffer.from(imagePart.inlineData.data, "base64");
+  const imageData = imagePart.inlineData.data;
+  const imageBuffer = typeof imageData === "string"
+    ? Buffer.from(imageData, "base64")
+    : Buffer.from(imageData as any);
   fs.writeFileSync(outputPath, imageBuffer);
 
   return outputPath;
