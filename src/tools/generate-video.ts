@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir } from "fs/promises";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { getGoogleClient } from "../google-client";
 
 /**
  * Generates video clips for shots using Veo 3.1 via @google/genai SDK.
@@ -63,11 +64,10 @@ export async function generateVideo(params: {
   console.log(`[generateVideo] Prompt: ${videoPrompt.substring(0, 100)}...`);
 
   try {
-    // Build request payload based on shot type
-    const requestPayload: Record<string, unknown> = {
-      model: "veo-3.1-generate-preview",
-      prompt: videoPrompt,
-    };
+    const client = getGoogleClient();
+
+    // Build parameters based on shot type
+    let operation;
 
     if (shotType === "first_last_frame") {
       // Mode 1: First+last frame interpolation
@@ -75,21 +75,21 @@ export async function generateVideo(params: {
         throw new Error("first_last_frame requires both startFramePath and endFramePath");
       }
 
+      // Load images as base64
       const startImageBuffer = readFileSync(startFramePath);
       const startImage = {
-        image: { imageBytes: startImageBuffer.toString("base64"), mimeType: "image/png" },
+        imageBytes: startImageBuffer.toString("base64"),
+        mimeType: "image/png",
       };
 
       const endImageBuffer = readFileSync(endFramePath);
       const endImage = {
-        image: { imageBytes: endImageBuffer.toString("base64"), mimeType: "image/png" },
+        imageBytes: endImageBuffer.toString("base64"),
+        mimeType: "image/png",
       };
-
-      requestPayload.image = startImage;
 
       // Build config with optional reference images
       const config: Record<string, unknown> = {
-        lastFrame: endImage,
         numberOfVideos: 1,
         durationSeconds,
         aspectRatio: "16:9",
@@ -98,85 +98,69 @@ export async function generateVideo(params: {
       if (referenceImagePaths && referenceImagePaths.length > 0) {
         const refImages = referenceImagePaths.slice(0, 3).map((path) => {
           const buffer = readFileSync(path);
-          return { image: { imageBytes: buffer.toString("base64"), mimeType: "image/png" } };
+          return {
+            image: {
+              imageBytes: buffer.toString("base64"),
+              mimeType: "image/png",
+            },
+            referenceType: "STYLE",
+          };
         });
         config.referenceImages = refImages;
       }
 
-      requestPayload.config = config;
+      operation = await client.models.generateVideos({
+        model: "veo-3.1-generate-preview",
+        prompt: videoPrompt,
+        image: startImage,
+        config: {
+          ...config,
+          lastFrame: endImage,
+        } as any,
+      });
     } else {
       // Mode 2: Scene extension
       if (!previousVideoPath) {
         throw new Error("extension requires previousVideoPath");
       }
 
+      // Load video as base64
       const videoBuffer = readFileSync(previousVideoPath);
-      const video = {
-        video: { videoBytes: videoBuffer.toString("base64"), mimeType: "video/mp4" },
+      const previousVideo = {
+        videoBytes: videoBuffer.toString("base64"),
+        mimeType: "video/mp4",
       };
 
-      requestPayload.video = video;
-      requestPayload.config = { numberOfVideos: 1 };
-    }
-
-    // Call Veo 3.1 API
-    console.log(`[generateVideo] Calling Veo 3.1 API for shot ${shotNumber}`);
-    console.log(`[generateVideo] Request type: ${shotType}`);
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is not set");
-    }
-
-    // Call Veo 3.1 API via REST endpoint (generateVideos is a long-running operation)
-    const apiUrl = "https://generativelanguage.googleapis.com/v1alpha/models/veo-3.1-generate-preview:generateVideos";
-
-    const generateResponse = await fetch(`${apiUrl}?key=${apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestPayload),
-    });
-
-    if (!generateResponse.ok) {
-      throw new Error(`Veo 3.1 API error: ${generateResponse.statusText}`);
-    }
-
-    const operationData = await generateResponse.json() as any;
-    let operationName = operationData.name;
-
-    if (!operationName) {
-      throw new Error("No operation name in Veo 3.1 response");
+      operation = await client.models.generateVideos({
+        model: "veo-3.1-generate-preview",
+        prompt: videoPrompt,
+        video: previousVideo,
+        config: {
+          numberOfVideos: 1,
+        } as any,
+      });
     }
 
     // Poll for operation completion
-    console.log(`[generateVideo] Polling for completion (operation: ${operationName})`);
-    const operationsUrl = `https://generativelanguage.googleapis.com/v1alpha/${operationName}`;
-    let operation = operationData;
+    console.log(`[generateVideo] Polling for completion (operation: ${operation.name})`);
 
     while (!operation.done) {
       await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait 10 seconds between polls
-      const pollResponse = await fetch(`${operationsUrl}?key=${apiKey}`);
-      if (!pollResponse.ok) {
-        throw new Error(`Failed to poll operation: ${pollResponse.statusText}`);
-      }
-      operation = await pollResponse.json();
+      operation = await client.operations.getVideosOperation({ operation });
     }
 
     // Extract generated video from response
-    const video = operation.response?.generatedVideos?.[0];
-    if (!video?.video?.uri) {
-      throw new Error(`No video URI in response for shot ${shotNumber}`);
+    const generatedVideo = operation.response?.generatedVideos?.[0];
+    if (!generatedVideo?.video) {
+      throw new Error(`No video in response for shot ${shotNumber}`);
     }
 
-    // Download the video from the URI
-    console.log(`[generateVideo] Downloading video from ${video.video.uri}`);
-    const response = await fetch(video.video.uri);
-    if (!response.ok) {
-      throw new Error(`Failed to download video: ${response.statusText}`);
-    }
-
-    const videoBuffer = Buffer.from(await response.arrayBuffer());
-    await writeFile(outputPath, videoBuffer);
+    // Download the video to disk
+    console.log(`[generateVideo] Downloading video for shot ${shotNumber}`);
+    await client.files.download({
+      file: generatedVideo.video,
+      downloadPath: outputPath,
+    });
 
     console.log(`[generateVideo] Shot ${shotNumber} saved to ${outputPath}`);
     return { shotNumber, path: outputPath, duration: durationSeconds };
