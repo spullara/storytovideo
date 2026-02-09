@@ -1,4 +1,4 @@
-import { generateText, tool } from "ai";
+import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { writeFileSync } from "fs";
@@ -78,19 +78,19 @@ async function runStage(
   _options: PipelineOptions,
   systemPrompt: string,
   userPrompt: string,
-  tools: Record<string, ReturnType<typeof tool>>,
+  tools: Record<string, any>,
   maxSteps: number,
   verbose: boolean,
 ): Promise<PipelineState> {
   console.log(`\n=== Stage: ${stageName} ===`);
 
   const result = await generateText({
-    model: anthropic("claude-opus-4-6"),
+    model: anthropic("claude-opus-4-6") as any,
     system: systemPrompt,
     prompt: userPrompt,
     tools,
     maxSteps,
-    onStepFinish: (step) => {
+    onStepFinish: (step: any) => {
       if (verbose) {
         if (step.text) {
           console.log(`[${stageName}] Claude: ${step.text.substring(0, 200)}`);
@@ -102,7 +102,7 @@ async function runStage(
         }
       }
     },
-  });
+  } as any);
 
   log(verbose, `[${stageName}] Final text:`, result.text?.substring(0, 300) || "(no text)");
 
@@ -127,7 +127,7 @@ After receiving the analysis, respond with a brief summary of what was found.`;
   const userPrompt = `Analyze this story:\n\n${storyText}`;
 
   const analysisTools = {
-    analyzeStory: tool({
+    analyzeStory: {
       description: analyzeStoryTool.description,
       parameters: analyzeStoryTool.parameters,
       execute: async (params: z.infer<typeof analyzeStoryTool.parameters>) => {
@@ -135,7 +135,7 @@ After receiving the analysis, respond with a brief summary of what was found.`;
         state.storyAnalysis = result;
         return result;
       },
-    }),
+    },
   };
 
   await runStage("analysis", state, options, systemPrompt, userPrompt, analysisTools, 5, options.verbose);
@@ -171,7 +171,7 @@ After receiving the shot plan, respond with a brief summary of the shots planned
   const userPrompt = `Plan cinematic shots for this story analysis:\n\n${analysisJson}`;
 
   const shotTools = {
-    planShots: tool({
+    planShots: {
       description: planShotsTool.description,
       parameters: planShotsTool.parameters,
       execute: async (params: z.infer<typeof planShotsTool.parameters>) => {
@@ -179,7 +179,7 @@ After receiving the shot plan, respond with a brief summary of the shots planned
         state.storyAnalysis = result;
         return result;
       },
-    }),
+    },
   };
 
   await runStage("shot_planning", state, options, systemPrompt, userPrompt, shotTools, 5, options.verbose);
@@ -250,8 +250,8 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
 
   const userPrompt = `Generate all needed reference assets. Characters: ${analysis.characters.map((c) => c.name).join(", ")}. Locations: ${analysis.locations.map((l) => l.name).join(", ")}.`;
 
-  const assetTools = {
-    generateAsset: tool({
+  const assetTools: Record<string, any> = {
+    generateAsset: {
       description: generateAssetTool.description,
       parameters: generateAssetTool.parameters,
       execute: async (params: z.infer<typeof generateAssetTool.parameters>) => {
@@ -280,24 +280,24 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
         }
         return result;
       },
-    }),
-    saveState: tool({
+    },
+    saveState: {
       description: saveStateTool.description,
       parameters: saveStateTool.parameters,
       execute: async () => {
         return saveState({ state });
       },
-    }),
+    },
   };
 
   if (options.verify) {
-    (assetTools as Record<string, ReturnType<typeof tool>>).verifyOutput = tool({
+    assetTools.verifyOutput = {
       description: verifyOutputTool.description,
       parameters: verifyOutputTool.parameters,
       execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
       },
-    });
+    };
   }
 
   await runStage("asset_generation", state, options, systemPrompt, userPrompt, assetTools, 60, options.verbose);
@@ -356,8 +356,8 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
 
   const userPrompt = `Generate keyframes for ${neededFrames.length} shots that need first_last_frame generation.`;
 
-  const frameTools = {
-    generateFrame: tool({
+  const frameTools: Record<string, any> = {
+    generateFrame: {
       description: generateFrameTool.description,
       parameters: generateFrameTool.parameters,
       execute: async (params: z.infer<typeof generateFrameTool.parameters>) => {
@@ -374,24 +374,24 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
         };
         return result;
       },
-    }),
-    saveState: tool({
+    },
+    saveState: {
       description: saveStateTool.description,
       parameters: saveStateTool.parameters,
       execute: async () => {
         return saveState({ state });
       },
-    }),
+    },
   };
 
   if (options.verify) {
-    (frameTools as Record<string, ReturnType<typeof tool>>).verifyOutput = tool({
+    frameTools.verifyOutput = {
       description: verifyOutputTool.description,
       parameters: verifyOutputTool.parameters,
       execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
       },
-    });
+    };
   }
 
   await runStage("frame_generation", state, options, systemPrompt, userPrompt, frameTools, 60, options.verbose);
@@ -449,8 +449,8 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber} (${s.shotT
 
   const userPrompt = `Generate video clips for ${neededVideos.length} shots. Process them in order by shot number.`;
 
-  const videoTools = {
-    generateVideo: tool({
+  const videoTools: Record<string, any> = {
+    generateVideo: {
       description: generateVideoTool.description,
       parameters: generateVideoTool.parameters,
       execute: async (params: z.infer<typeof generateVideoTool.parameters>) => {
@@ -463,24 +463,24 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber} (${s.shotT
         state.generatedVideos[result.shotNumber] = result.path;
         return result;
       },
-    }),
-    saveState: tool({
+    },
+    saveState: {
       description: saveStateTool.description,
       parameters: saveStateTool.parameters,
       execute: async () => {
         return saveState({ state });
       },
-    }),
+    },
   };
 
   if (options.verify) {
-    (videoTools as Record<string, ReturnType<typeof tool>>).verifyOutput = tool({
+    videoTools.verifyOutput = {
       description: verifyOutputTool.description,
       parameters: verifyOutputTool.parameters,
       execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
       },
-    });
+    };
   }
 
   await runStage("video_generation", state, options, systemPrompt, userPrompt, videoTools, 80, options.verbose);
@@ -525,7 +525,7 @@ Output directory: "${options.outputDir}"`;
   const userPrompt = `Assemble ${videoPaths.length} video clips into the final video.`;
 
   const assemblyTools = {
-    assembleVideo: tool({
+    assembleVideo: {
       description: assembleVideoTool.description,
       parameters: assembleVideoTool.parameters,
       execute: async (params: z.infer<typeof assembleVideoTool.parameters>) => {
@@ -534,14 +534,14 @@ Output directory: "${options.outputDir}"`;
           dryRun: options.dryRun,
         });
       },
-    }),
-    saveState: tool({
+    },
+    saveState: {
       description: saveStateTool.description,
       parameters: saveStateTool.parameters,
       execute: async () => {
         return saveState({ state });
       },
-    }),
+    },
   };
 
   await runStage("assembly", state, options, systemPrompt, userPrompt, assemblyTools, 10, options.verbose);
