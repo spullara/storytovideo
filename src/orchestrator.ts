@@ -302,6 +302,13 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
 
   await runStage("asset_generation", state, options, systemPrompt, userPrompt, assetTools, 60, options.verbose);
 
+  // Check if any assets were actually generated
+  const assetCount = Object.keys(state.generatedAssets).length;
+  if (assetCount === 0 && neededAssets.length > 0) {
+    console.warn(`[asset_generation] WARNING: Stage completed but generated 0/${neededAssets.length} assets. NOT marking as complete.`);
+    state.currentStage = "frame_generation";
+    return state;
+  }
   state.completedStages.push("asset_generation");
   state.currentStage = "frame_generation";
   return state;
@@ -396,6 +403,13 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
 
   await runStage("frame_generation", state, options, systemPrompt, userPrompt, frameTools, 60, options.verbose);
 
+  // Check if any frames were actually generated
+  const frameCount = Object.keys(state.generatedFrames).length;
+  if (frameCount === 0 && neededFrames.length > 0) {
+    console.warn(`[frame_generation] WARNING: Stage completed but generated 0/${neededFrames.length} frames. NOT marking as complete.`);
+    state.currentStage = "video_generation";
+    return state;
+  }
   state.completedStages.push("frame_generation");
   state.currentStage = "video_generation";
   return state;
@@ -484,6 +498,15 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber} (${s.shotT
 
   await runStage("video_generation", state, options, systemPrompt, userPrompt, videoTools, 80, options.verbose);
 
+  // Check if any videos were actually generated
+  const videoCount = Object.keys(state.generatedVideos).length;
+  const shotCount = state.storyAnalysis?.scenes?.reduce((sum, s) => sum + (s.shots?.length || 0), 0) || 0;
+  if (videoCount === 0 && shotCount > 0) {
+    console.warn(`[video_generation] WARNING: Stage completed but generated 0/${shotCount} videos. NOT marking as complete.`);
+    // Still advance to assembly so pipeline can report status, but don't mark as completed
+    state.currentStage = "assembly";
+    return state;
+  }
   state.completedStages.push("video_generation");
   state.currentStage = "assembly";
   return state;
@@ -592,6 +615,14 @@ export async function runPipeline(
     for (let i = 0; i < skipIdx; i++) {
       if (!state.completedStages.includes(STAGE_ORDER[i])) {
         state.completedStages.push(STAGE_ORDER[i]);
+      }
+    }
+    // Remove the target stage and all subsequent stages from completedStages
+    // so they will be re-run
+    for (let i = skipIdx; i < STAGE_ORDER.length; i++) {
+      const idx = state.completedStages.indexOf(STAGE_ORDER[i]);
+      if (idx !== -1) {
+        state.completedStages.splice(idx, 1);
       }
     }
     state.currentStage = options.skipTo;
