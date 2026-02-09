@@ -89,9 +89,9 @@ export async function generateVideo(params: {
       };
 
       // Build config with optional reference images
+      // Note: Interpolation requires durationSeconds: 8 for 1080p+ per API docs
       const config: Record<string, unknown> = {
-        numberOfVideos: 1,
-        durationSeconds,
+        durationSeconds: 8,
         aspectRatio: "16:9",
       };
 
@@ -108,6 +108,8 @@ export async function generateVideo(params: {
         });
         config.referenceImages = refImages;
       }
+
+      console.log(`[generateVideo] Config: ${JSON.stringify(config)}`);
 
       operation = await client.models.generateVideos({
         model: "veo-3.1-generate-preview",
@@ -136,7 +138,8 @@ export async function generateVideo(params: {
         prompt: videoPrompt,
         video: previousVideo,
         config: {
-          numberOfVideos: 1,
+          durationSeconds: 8,
+          resolution: "720p",
         } as any,
       });
     }
