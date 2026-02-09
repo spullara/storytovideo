@@ -446,18 +446,21 @@ async function runVideoGenerationStage(
 Current pipeline state:
 ${stateJson}
 
-For each shot, call generateVideo with the appropriate parameters:
+Generate video clips ONE AT A TIME. Call generateVideo for ONE shot, wait for the result, then proceed to the next shot.
+
+CRITICAL: You MUST only call generateVideo ONCE per response. After each call completes, call saveState, then call generateVideo for the next shot. NEVER call generateVideo multiple times in the same response.
+
+For each shot:
 - For first_last_frame shots: provide startFramePath and endFramePath from state.generatedFrames
 - For extension shots: provide previousVideoPath from the previous shot's generated video
-- Generate shots SEQUENTIALLY within each scene (extension shots need the previous video)
 
-IMPORTANT:
+Rules:
+- Generate ONE video per step. Do NOT batch multiple generateVideo calls.
 - Check state.generatedVideos[shotNumber] before generating — skip if already exists.
 - After EACH successful generation, call saveState to checkpoint progress.
 - Pass dryRun=${options.dryRun} to generateVideo.
 - Use outputDir="${join(options.outputDir, "videos")}" for all videos.
 - Process shots in order (by shotNumber) since extension shots depend on previous shots.
-- For reference images, collect character front images from the asset library for characters in the shot.
 
 Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber} (${s.shotType})`).join(", ")}`;
 
