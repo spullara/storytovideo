@@ -143,9 +143,21 @@ export async function generateVideo(params: {
         }
 
         // Extract generated video from response
-        const generatedVideo = operation.response?.generatedVideos?.[0];
+        const response = operation.response;
+        const generatedVideo = response?.generatedVideos?.[0];
         if (!generatedVideo?.video) {
-          throw new Error(`No video in response for shot ${shotNumber}`);
+          // Log full response for debugging (may include RAI filter info)
+          const filterCount = response?.raiMediaFilteredCount;
+          const filterReasons = response?.raiMediaFilteredReasons;
+          const errorInfo = operation.error;
+          console.error(`[generateVideo] Shot ${shotNumber}: No video returned.`);
+          if (filterCount) console.error(`[generateVideo]   RAI filtered count: ${filterCount}`);
+          if (filterReasons?.length) console.error(`[generateVideo]   RAI filter reasons: ${filterReasons.join(', ')}`);
+          if (errorInfo) console.error(`[generateVideo]   Operation error: ${JSON.stringify(errorInfo)}`);
+          if (!filterCount && !filterReasons?.length && !errorInfo) {
+            console.error(`[generateVideo]   Full response: ${JSON.stringify(response)}`);
+          }
+          throw new Error(`No video in response for shot ${shotNumber}${filterReasons?.length ? ` (RAI: ${filterReasons.join(', ')})` : ''}`);
         }
 
         // Download the video to disk
