@@ -366,15 +366,6 @@ function parseStageName(value: unknown, fieldName: string): string {
   return value;
 }
 
-function getNextPendingStage(state: PipelineState): string | null {
-  for (const stage of STAGE_ORDER) {
-    if (!state.completedStages.includes(stage)) {
-      return stage;
-    }
-  }
-  return null;
-}
-
 function parseSubmitInstructionRequest(body: unknown): SubmitInstructionRequest {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw new Error("Request body must be a JSON object");
@@ -900,10 +891,20 @@ async function handleSubmitInstruction(
 
   const parsedBody = await readJsonBody(req);
   const parsedRequest = parseSubmitInstructionRequest(parsedBody);
-  const stage =
-    parsedRequest.stage ?? getNextPendingStage(state);
+
+  // Default to the last completed stage (the one being reviewed)
+  // Fall back to currentStage if completedStages is empty
+  let stage = parsedRequest.stage;
   if (!stage) {
-    sendJson(res, 409, { error: "No pending stage available for instruction" });
+    if (state.completedStages.length > 0) {
+      stage = state.completedStages[state.completedStages.length - 1];
+    } else {
+      stage = state.currentStage;
+    }
+  }
+
+  if (!stage) {
+    sendJson(res, 409, { error: "No stage available for instruction" });
     return;
   }
   const submittedAt = new Date().toISOString();
@@ -918,13 +919,33 @@ async function handleSubmitInstruction(
   });
 
   await saveState({ state });
-  pollRunState(runId);
-  emitLogEvent(runId, `Instruction added for stage ${stage}`);
+
+  // Auto-continue the run (same logic as handleContinueRun)
+  state.continueRequested = true;
+  const decidedAt = new Date().toISOString();
+  const instructionCount = state.pendingStageInstructions[stage].length;
+  state.decisionHistory.push({
+    stage,
+    decision: "instruction",
+    decidedAt,
+    instructionCount,
+  });
+  await saveState({ state });
 
   const updatedRecord = runStore.patch(runId, {
+    status: "queued",
+    completedAt: undefined,
+    error: undefined,
     currentStage: state.currentStage,
     completedStages: state.completedStages,
   }) ?? run;
+
+  emitRunStatusEvent(runId, "queued");
+  emitLogEvent(runId, `Instruction added for stage ${stage}`);
+  startRunStateMonitor(runId);
+  setImmediate(() => {
+    void runInBackground(runId, true);
+  });
 
   sendJson(res, 200, {
     run: toRunResponse(updatedRecord),

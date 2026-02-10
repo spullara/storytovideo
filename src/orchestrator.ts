@@ -720,6 +720,15 @@ export async function runPipeline(
     assembly: runAssemblyStage,
   };
 
+  // Before the stage loop, check if any completed stage has pending instructions
+  // If so, remove it from completedStages so it gets re-run
+  for (const stageName of state.completedStages) {
+    if (state.pendingStageInstructions[stageName]?.length > 0) {
+      console.log(`Re-running completed stage ${stageName} due to pending instructions`);
+      state.completedStages = state.completedStages.filter(s => s !== stageName);
+    }
+  }
+
   for (const stageName of STAGE_ORDER) {
     // Skip completed stages
     if (state.completedStages.includes(stageName)) {

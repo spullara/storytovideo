@@ -77,7 +77,7 @@ export interface StageInstructionRecord {
 
 export interface StageDecisionRecord {
   stage: string;
-  decision: "continue";
+  decision: "continue" | "instruction";
   decidedAt: string;
   instructionCount: number;
 }

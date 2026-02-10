@@ -109,7 +109,7 @@ export const saveStateTool = {
       })),
       decisionHistory: z.array(z.object({
         stage: z.string(),
-        decision: z.literal("continue"),
+        decision: z.enum(["continue", "instruction"]),
         decidedAt: z.string(),
         instructionCount: z.number(),
       })),

@@ -885,8 +885,6 @@ async function handleSubmitInstruction(event) {
         timestamp: response.submittedAt,
       }),
     );
-    await refreshRun();
-    await refreshAssets();
     setGlobalError("");
   } catch (error) {
     setGlobalError(`Failed to submit instruction: ${error.message}`);
