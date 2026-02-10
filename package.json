@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
+    "dev:server": "tsx src/server.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
