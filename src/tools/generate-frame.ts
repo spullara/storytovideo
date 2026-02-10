@@ -15,8 +15,9 @@ export async function generateFrame(params: {
   assetLibrary: AssetLibrary;
   outputDir: string;
   dryRun?: boolean;
+  previousEndFramePath?: string;
 }): Promise<{ shotNumber: number; startPath?: string; endPath?: string }> {
-  const { shot, artStyle, assetLibrary, outputDir, dryRun = false } = params;
+  const { shot, artStyle, assetLibrary, outputDir, dryRun = false, previousEndFramePath } = params;
 
   // Create frames directory if it doesn't exist
   const framesDir = path.join(outputDir, "frames");
@@ -44,6 +45,7 @@ export async function generateFrame(params: {
       assetLibrary,
       isEndFrame: false,
       previousStartFramePath: undefined,
+      previousEndFramePath,
       outputPath: startPath,
     });
 
@@ -78,6 +80,7 @@ async function generateSingleFrame(params: {
   assetLibrary: AssetLibrary;
   isEndFrame: boolean;
   previousStartFramePath?: string;
+  previousEndFramePath?: string;
   outputPath: string;
 }): Promise<string> {
   const {
@@ -86,6 +89,7 @@ async function generateSingleFrame(params: {
     assetLibrary,
     isEndFrame,
     previousStartFramePath,
+    previousEndFramePath,
     outputPath,
   } = params;
 
@@ -129,6 +133,14 @@ async function generateSingleFrame(params: {
         });
       }
     }
+  }
+
+  // For start frame, add the previous shot's end frame for cross-shot continuity
+  if (!isEndFrame && previousEndFramePath && fs.existsSync(previousEndFramePath)) {
+    const prevEndData = fs.readFileSync(previousEndFramePath, "base64");
+    imageParts.push({
+      inlineData: { mimeType: "image/png", data: prevEndData },
+    });
   }
 
   // For end frame, add the start frame as additional input for visual continuity
@@ -225,6 +237,7 @@ Generate a high-quality, cinematic image that:
 4. Follows the camera direction and framing
 5. Is suitable as a keyframe for video generation
 6. Maintains visual continuity with reference images provided
+7. CRITICAL: If a reference image of the previous shot's end frame is provided, your start frame must visually match that moment — same characters, positions, lighting, and setting. The camera angle/composition may change, but the scene content must be continuous.
 
 Aspect ratio: 16:9`;
 }
@@ -262,6 +275,10 @@ export const generateFrameTool = {
       .boolean()
       .optional()
       .describe("If true, return placeholder paths without calling API"),
+    previousEndFramePath: z
+      .string()
+      .optional()
+      .describe("Path to the previous shot's end frame image for cross-shot visual continuity"),
   }),
 };
 
