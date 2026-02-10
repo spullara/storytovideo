@@ -66,6 +66,20 @@ export interface PipelineOptions {
   skipTo?: string;
   resume: boolean;
   verbose: boolean;
+  reviewMode?: boolean;
+}
+
+export interface StageInstructionRecord {
+  stage: string;
+  instruction: string;
+  submittedAt: string;
+}
+
+export interface StageDecisionRecord {
+  stage: string;
+  decision: "continue";
+  decidedAt: string;
+  instructionCount: number;
 }
 
 export interface PipelineState {
@@ -81,6 +95,10 @@ export interface PipelineState {
   errors: Array<{ stage: string; shot?: number; error: string; timestamp: string }>;
   verifications: Array<{ stage: string; shot?: number; passed: boolean; score: number; issues: string[]; timestamp: string }>;
   interrupted: boolean;                            // true if last run was interrupted
+  awaitingUserReview: boolean;                     // true when next stage needs explicit user continue
+  continueRequested: boolean;                      // true when user requested continue while awaiting review
+  pendingStageInstructions: Record<string, string[]>;
+  instructionHistory: StageInstructionRecord[];
+  decisionHistory: StageDecisionRecord[];
   lastSavedAt: string;                             // ISO timestamp of last state save
 }
-

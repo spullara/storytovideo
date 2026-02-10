@@ -3,6 +3,17 @@ import * as fs from "fs";
 import * as path from "path";
 import type { PipelineState } from "../types";
 
+function withReviewDefaults(state: PipelineState): PipelineState {
+  return {
+    ...state,
+    awaitingUserReview: state.awaitingUserReview ?? false,
+    continueRequested: state.continueRequested ?? false,
+    pendingStageInstructions: state.pendingStageInstructions ?? {},
+    instructionHistory: state.instructionHistory ?? [],
+    decisionHistory: state.decisionHistory ?? [],
+  };
+}
+
 /**
  * Saves the pipeline state to a JSON file and creates the output directory structure.
  * Also saves a human-readable story_analysis.json if analysis is available.
@@ -59,7 +70,8 @@ export function loadState(outputDir: string): PipelineState | null {
 
   try {
     const content = fs.readFileSync(statePath, "utf-8");
-    return JSON.parse(content) as PipelineState;
+    const parsed = JSON.parse(content) as PipelineState;
+    return withReviewDefaults(parsed);
   } catch (error) {
     console.error(`Failed to load state from ${statePath}:`, error);
     return null;
@@ -87,8 +99,21 @@ export const saveStateTool = {
       errors: z.array(z.object({ stage: z.string(), shot: z.number().optional(), error: z.string(), timestamp: z.string() })),
       verifications: z.array(z.object({ stage: z.string(), shot: z.number().optional(), passed: z.boolean(), score: z.number(), issues: z.array(z.string()), timestamp: z.string() })),
       interrupted: z.boolean(),
+      awaitingUserReview: z.boolean(),
+      continueRequested: z.boolean(),
+      pendingStageInstructions: z.record(z.string(), z.array(z.string())),
+      instructionHistory: z.array(z.object({
+        stage: z.string(),
+        instruction: z.string(),
+        submittedAt: z.string(),
+      })),
+      decisionHistory: z.array(z.object({
+        stage: z.string(),
+        decision: z.literal("continue"),
+        decidedAt: z.string(),
+        instructionCount: z.number(),
+      })),
       lastSavedAt: z.string(),
     }).describe("Full pipeline state to save"),
   }),
 };
-

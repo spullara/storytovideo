@@ -1011,6 +1011,145 @@ async function handleCreateRun(req: IncomingMessage, res: ServerResponse): Promi
   sendJson(res, 201, toRunResponse(record));
 }
 
+async function handleSubmitInstruction(
+  req: IncomingMessage,
+  res: ServerResponse,
+  runId: string,
+): Promise<void> {
+  const run = runStore.get(runId);
+  if (!run) {
+    sendJson(res, 404, { error: `Run not found: ${runId}` });
+    return;
+  }
+
+  if (!run.options.reviewMode) {
+    sendJson(res, 409, { error: "Run is not configured for review mode" });
+    return;
+  }
+
+  const state = loadState(run.outputDir);
+  if (!state) {
+    sendJson(res, 409, { error: "Run state is not available" });
+    return;
+  }
+
+  if (!state.awaitingUserReview) {
+    sendJson(res, 409, { error: "Run is not awaiting review" });
+    return;
+  }
+
+  const parsedBody = await readJsonBody(req);
+  const parsedRequest = parseSubmitInstructionRequest(parsedBody);
+  const stage =
+    parsedRequest.stage ?? parseStageName(state.currentStage, "current stage");
+  const submittedAt = new Date().toISOString();
+
+  const nextInstructions = state.pendingStageInstructions[stage] ?? [];
+  nextInstructions.push(parsedRequest.instruction);
+  state.pendingStageInstructions[stage] = nextInstructions;
+  state.instructionHistory.push({
+    stage,
+    instruction: parsedRequest.instruction,
+    submittedAt,
+  });
+
+  await saveState({ state });
+  pollRunState(runId);
+  emitLogEvent(runId, `Instruction added for stage ${stage}`);
+
+  const updatedRecord = runStore.patch(runId, {
+    currentStage: state.currentStage,
+    completedStages: state.completedStages,
+  }) ?? run;
+
+  sendJson(res, 200, {
+    run: toRunResponse(updatedRecord),
+    stage,
+    instructionCount: state.pendingStageInstructions[stage].length,
+    submittedAt,
+  });
+}
+
+async function handleContinueRun(
+  req: IncomingMessage,
+  res: ServerResponse,
+  runId: string,
+): Promise<void> {
+  const run = runStore.get(runId);
+  if (!run) {
+    sendJson(res, 404, { error: `Run not found: ${runId}` });
+    return;
+  }
+
+  if (!run.options.reviewMode) {
+    sendJson(res, 409, { error: "Run is not configured for review mode" });
+    return;
+  }
+
+  if (run.status === "running" || run.status === "queued") {
+    sendJson(res, 409, { error: "Run is already in progress" });
+    return;
+  }
+
+  const state = loadState(run.outputDir);
+  if (!state) {
+    sendJson(res, 409, { error: "Run state is not available" });
+    return;
+  }
+
+  if (!state.awaitingUserReview) {
+    sendJson(res, 409, { error: "Run is not awaiting review" });
+    return;
+  }
+
+  if (state.continueRequested) {
+    sendJson(res, 202, {
+      run: toRunResponse(run),
+      message: "Continue already requested",
+    });
+    return;
+  }
+
+  await readJsonBody(req);
+  const stage = parseStageName(state.currentStage, "current stage");
+  const decidedAt = new Date().toISOString();
+  const instructionCount =
+    (state.pendingStageInstructions[stage] ?? []).length;
+
+  state.continueRequested = true;
+  state.decisionHistory.push({
+    stage,
+    decision: "continue",
+    decidedAt,
+    instructionCount,
+  });
+  await saveState({ state });
+
+  const updatedRecord = runStore.patch(runId, {
+    status: "queued",
+    completedAt: undefined,
+    error: undefined,
+    currentStage: state.currentStage,
+    completedStages: state.completedStages,
+  }) ?? run;
+
+  emitRunStatusEvent(runId, "queued");
+  emitLogEvent(runId, `Continue requested for stage ${stage}`);
+  startRunStateMonitor(runId);
+  setImmediate(() => {
+    void runInBackground(runId);
+  });
+
+  sendJson(res, 202, {
+    run: toRunResponse(updatedRecord),
+    decision: {
+      stage,
+      decidedAt,
+      instructionCount,
+    },
+  });
+}
+
 async function requestHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   setCorsHeaders(res);
 
@@ -1038,6 +1177,18 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
     if (method === "GET" && url.pathname === "/runs") {
       const runs = runStore.list().map((run) => toRunResponse(run));
       sendJson(res, 200, { runs });
+      return;
+    }
+
+    if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "instructions") {
+      const runId = decodeURIComponent(pathParts[1]);
+      await handleSubmitInstruction(req, res, runId);
+      return;
+    }
+
+    if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "continue") {
+      const runId = decodeURIComponent(pathParts[1]);
+      await handleContinueRun(req, res, runId);
       return;
     }
 

@@ -54,6 +54,11 @@ function createInitialState(storyFile: string, outputDir: string): PipelineState
     errors: [],
     verifications: [],
     interrupted: false,
+    awaitingUserReview: false,
+    continueRequested: false,
+    pendingStageInstructions: {},
+    instructionHistory: [],
+    decisionHistory: [],
     lastSavedAt: new Date().toISOString(),
   };
 }
@@ -66,6 +71,22 @@ function log(verbose: boolean, ...args: unknown[]): void {
 
 function compactState(state: PipelineState): string {
   return JSON.stringify(state, null, 2);
+}
+
+function getStageInstructions(state: PipelineState, stageName: string): string[] {
+  return state.pendingStageInstructions[stageName] ?? [];
+}
+
+function buildInstructionInjectionBlock(instructions: string[]): string {
+  if (instructions.length === 0) {
+    return "";
+  }
+
+  const numbered = instructions
+    .map((instruction, index) => `${index + 1}. ${instruction}`)
+    .join("\n");
+
+  return `\n\nAdditional user instructions for this stage:\n${numbered}\nApply these instructions when executing this stage unless they conflict with tool schemas or safety constraints.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,10 +104,18 @@ async function runStage(
   verbose: boolean,
 ): Promise<PipelineState> {
   console.log(`\n=== Stage: ${stageName} ===`);
+  const stageInstructions = getStageInstructions(state, stageName);
+  if (stageInstructions.length > 0) {
+    console.log(
+      `[${stageName}] Applying ${stageInstructions.length} user instruction(s)`,
+    );
+  }
+  const injectedSystemPrompt =
+    systemPrompt + buildInstructionInjectionBlock(stageInstructions);
 
   const result = await generateText({
     model: anthropic("claude-opus-4-6") as any,
-    system: systemPrompt,
+    system: injectedSystemPrompt,
     prompt: userPrompt,
     tools,
     stopWhen: stepCountIs(maxSteps),
@@ -672,6 +701,15 @@ export async function runPipeline(
     console.log(`Skipping to stage: ${options.skipTo}`);
   }
 
+  if (options.reviewMode && state.awaitingUserReview) {
+    if (!state.continueRequested) {
+      console.log("\nAwaiting user review before continuing.");
+      return;
+    }
+    state.awaitingUserReview = false;
+    state.continueRequested = false;
+  }
+
   // Stage loop
   const stageRunners: Record<StageName, (s: PipelineState, o: PipelineOptions) => Promise<PipelineState>> = {
     analysis: (s, o) => runAnalysisStage(s, storyText, o),
@@ -720,8 +758,24 @@ export async function runPipeline(
       throw error;
     }
 
+    delete state.pendingStageInstructions[stageName];
+
+    const shouldPauseForReview =
+      Boolean(options.reviewMode) && stageName !== "assembly";
+    if (shouldPauseForReview) {
+      state.awaitingUserReview = true;
+      state.continueRequested = false;
+    }
+
     // Save state between stages
     await saveState({ state });
+
+    if (shouldPauseForReview) {
+      console.log(
+        `\nPaused after ${stageName}. Awaiting user review before ${state.currentStage}.`,
+      );
+      return;
+    }
 
     // After shot_planning in dry-run mode, save analysis and stop
     if (options.dryRun && stageName === "shot_planning") {
