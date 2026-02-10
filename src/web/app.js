@@ -39,6 +39,7 @@ const elements = {
   reviewAwaiting: getElement("review-awaiting"),
   reviewContinueState: getElement("review-continue-state"),
   reviewPendingCount: getElement("review-pending-count"),
+  reviewLockMessage: getElement("review-lock-message"),
   instructionForm: getElement("instruction-form"),
   instructionText: getElement("instruction-text"),
   instructionStage: getElement("instruction-stage"),
@@ -46,6 +47,8 @@ const elements = {
   continueButton: getElement("continue-button"),
   eventsList: getElement("events-list"),
   assetsList: getElement("assets-list"),
+  stageOutputSection: getElement("stage-output-section"),
+  stageOutput: getElement("stage-output"),
 };
 
 function getElement(id) {
@@ -69,6 +72,29 @@ function formatTimestamp(value) {
     return value;
   }
   return date.toLocaleString();
+}
+
+function escapeHtml(text) {
+  if (typeof text !== "string") {
+    return "";
+  }
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function isRunActivelyExecuting(run) {
+  return Boolean(run) && (run.status === "queued" || run.status === "running");
+}
+
+function isRunReviewSafe(run) {
+  return Boolean(run) && run.status === "awaiting_review" && Boolean(run.review?.awaitingUserReview);
+}
+
+function setReviewLockMessage(message, tone = "locked") {
+  elements.reviewLockMessage.textContent = message;
+  elements.reviewLockMessage.classList.remove("lock-message-locked", "lock-message-ready");
+  elements.reviewLockMessage.classList.add(tone === "ready" ? "lock-message-ready" : "lock-message-locked");
 }
 
 function setGlobalError(message) {
@@ -194,6 +220,7 @@ function renderRunDetails() {
     elements.instructionText.disabled = true;
     elements.instructionStage.disabled = true;
     elements.continueButton.disabled = true;
+    setReviewLockMessage("Select a run to inspect review control lock state.");
     renderStageProgress();
     return;
   }
@@ -213,11 +240,33 @@ function renderRunDetails() {
   elements.reviewContinueState.textContent = continueRequested ? "yes" : "no";
   elements.reviewPendingCount.textContent = String(pendingCount);
 
-  const controlsEnabled = awaiting;
-  elements.submitInstructionButton.disabled = !controlsEnabled;
-  elements.instructionText.disabled = !controlsEnabled;
-  elements.instructionStage.disabled = !controlsEnabled;
-  elements.continueButton.disabled = !controlsEnabled || continueRequested;
+  const reviewSafe = isRunReviewSafe(run);
+  elements.submitInstructionButton.disabled = !reviewSafe;
+  elements.instructionText.disabled = !reviewSafe;
+  elements.instructionStage.disabled = !reviewSafe;
+  elements.continueButton.disabled = !reviewSafe || continueRequested;
+
+  if (isRunActivelyExecuting(run)) {
+    setReviewLockMessage(
+      "Review controls are locked while this run is executing (queued/running). Interrupt and wait for status \"awaiting review\" to unlock.",
+    );
+  } else if (reviewSafe) {
+    if (continueRequested) {
+      setReviewLockMessage(
+        "Run is in review-safe state. Continue has already been requested; you can still submit instructions.",
+        "ready",
+      );
+    } else {
+      setReviewLockMessage(
+        "Run is in review-safe state. Submit instructions or continue to the next stage.",
+        "ready",
+      );
+    }
+  } else {
+    setReviewLockMessage(
+      `Review controls are unavailable while status is \"${formatStageLabel(run.status)}\". Controls unlock when status returns to \"awaiting review\" (including after interrupt).`,
+    );
+  }
 
   renderStageProgress();
 }
@@ -294,7 +343,21 @@ function renderAssets() {
   for (const asset of items) {
     const item = document.createElement("li");
 
-    if (asset.previewUrl) {
+    if (asset.type === "document") {
+      // Document assets get a special icon/preview
+      const preview = document.createElement("div");
+      preview.className = "asset-preview asset-preview-document";
+      preview.innerHTML = `
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </svg>
+      `;
+      item.append(preview);
+    } else if (asset.previewUrl) {
       const isVideo = asset.type === "video" || asset.previewUrl.endsWith(".mp4") || asset.previewUrl.endsWith(".mov");
       if (isVideo) {
         const preview = document.createElement("video");
@@ -318,13 +381,21 @@ function renderAssets() {
 
     const title = document.createElement("p");
     title.className = "asset-title";
-    title.textContent = `${asset.type}: ${asset.key}`;
+    if (asset.type === "document") {
+      title.textContent = "Story Analysis";
+    } else {
+      title.textContent = `${asset.type}: ${asset.key}`;
+    }
     content.append(title);
 
     const meta = document.createElement("p");
     meta.className = "asset-meta";
-    const shot = asset.shotNumber !== undefined ? `shot ${asset.shotNumber}` : "run-level";
-    meta.textContent = `${shot} | ${formatTimestamp(asset.createdAt)}`;
+    if (asset.type === "document") {
+      meta.textContent = `Document | ${formatTimestamp(asset.createdAt)}`;
+    } else {
+      const shot = asset.shotNumber !== undefined ? `shot ${asset.shotNumber}` : "run-level";
+      meta.textContent = `${shot} | ${formatTimestamp(asset.createdAt)}`;
+    }
     content.append(meta);
 
     const pathText = document.createElement("p");
@@ -338,7 +409,11 @@ function renderAssets() {
       link.href = asset.previewUrl;
       link.target = "_blank";
       link.rel = "noreferrer";
-      link.textContent = "Open media";
+      if (asset.type === "document") {
+        link.textContent = "View JSON";
+      } else {
+        link.textContent = "Open media";
+      }
       content.append(link);
     }
 
@@ -370,6 +445,7 @@ async function refreshRun({ silent = false } = {}) {
     }
     state.activeRun = run;
     renderRunDetails();
+    void fetchAndRenderStageOutput({ silent });
   } catch (error) {
     if (!silent) {
       setGlobalError(`Failed to fetch run: ${error.message}`);
@@ -401,6 +477,111 @@ async function refreshAssets({ silent = false } = {}) {
     if (!silent) {
       setGlobalError(`Failed to fetch assets: ${error.message}`);
     }
+  }
+}
+
+async function fetchAndRenderStageOutput({ silent = false } = {}) {
+  if (!state.activeRunId) {
+    elements.stageOutputSection.style.display = "none";
+    return;
+  }
+  const runId = state.activeRunId;
+
+  try {
+    const response = await requestJson(`/runs/${encodeURIComponent(runId)}/state`);
+    if (state.activeRunId !== runId) {
+      return;
+    }
+
+    const { storyAnalysis } = response;
+    if (!storyAnalysis) {
+      elements.stageOutputSection.style.display = "none";
+      return;
+    }
+
+    // Build the stage output HTML
+    let html = "";
+
+    // Title and art style
+    html += `<div class="stage-output-header">`;
+    html += `<h3>${escapeHtml(storyAnalysis.title)}</h3>`;
+    html += `<p class="muted">Art Style: ${escapeHtml(storyAnalysis.artStyle)}</p>`;
+    html += `</div>`;
+
+    // Characters
+    if (storyAnalysis.characters && storyAnalysis.characters.length > 0) {
+      html += `<div class="stage-output-section">`;
+      html += `<h4>Characters</h4>`;
+      html += `<table class="stage-output-table">`;
+      html += `<thead><tr><th>Name</th><th>Description</th><th>Age Range</th></tr></thead>`;
+      html += `<tbody>`;
+      for (const char of storyAnalysis.characters) {
+        html += `<tr>`;
+        html += `<td><strong>${escapeHtml(char.name)}</strong></td>`;
+        html += `<td>${escapeHtml(char.physicalDescription)}</td>`;
+        html += `<td>${escapeHtml(char.ageRange)}</td>`;
+        html += `</tr>`;
+      }
+      html += `</tbody></table>`;
+      html += `</div>`;
+    }
+
+    // Locations
+    if (storyAnalysis.locations && storyAnalysis.locations.length > 0) {
+      html += `<div class="stage-output-section">`;
+      html += `<h4>Locations</h4>`;
+      html += `<table class="stage-output-table">`;
+      html += `<thead><tr><th>Name</th><th>Description</th></tr></thead>`;
+      html += `<tbody>`;
+      for (const loc of storyAnalysis.locations) {
+        html += `<tr>`;
+        html += `<td><strong>${escapeHtml(loc.name)}</strong></td>`;
+        html += `<td>${escapeHtml(loc.visualDescription)}</td>`;
+        html += `</tr>`;
+      }
+      html += `</tbody></table>`;
+      html += `</div>`;
+    }
+
+    // Scenes with shot breakdowns
+    if (storyAnalysis.scenes && storyAnalysis.scenes.length > 0) {
+      html += `<div class="stage-output-section">`;
+      html += `<h4>Scenes</h4>`;
+      for (const scene of storyAnalysis.scenes) {
+        html += `<div class="scene-block">`;
+        html += `<h5>Scene ${scene.sceneNumber}: ${escapeHtml(scene.title)}</h5>`;
+        html += `<p class="muted">${escapeHtml(scene.narrativeSummary)}</p>`;
+        html += `<p class="muted"><em>Location: ${escapeHtml(scene.location)} • Duration: ${scene.estimatedDurationSeconds}s</em></p>`;
+
+        // Show shots if they exist and are populated
+        if (scene.shots && scene.shots.length > 0) {
+          html += `<table class="stage-output-table scene-shots-table">`;
+          html += `<thead><tr><th>Shot</th><th>Composition</th><th>Duration</th><th>Dialogue</th></tr></thead>`;
+          html += `<tbody>`;
+          for (const shot of scene.shots) {
+            const dialogue = shot.dialogue ? escapeHtml(shot.dialogue) : "<em>—</em>";
+            html += `<tr>`;
+            html += `<td>${shot.shotNumber}</td>`;
+            html += `<td>${escapeHtml(shot.composition)}</td>`;
+            html += `<td>${shot.durationSeconds}s</td>`;
+            html += `<td>${dialogue}</td>`;
+            html += `</tr>`;
+          }
+          html += `</tbody></table>`;
+        }
+
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+
+    elements.stageOutput.innerHTML = html;
+    elements.stageOutputSection.style.display = "";
+  } catch (error) {
+    if (!silent) {
+      setGlobalError(`Failed to fetch stage output: ${error.message}`);
+    }
+    elements.stageOutputSection.style.display = "none";
   }
 }
 
@@ -450,6 +631,7 @@ function handleRunEvent(type, messageEvent, source) {
           }),
         );
         scheduleRunRefresh();
+        void fetchAndRenderStageOutput({ silent: true });
         break;
       }
       case "stage_transition": {
@@ -472,6 +654,7 @@ function handleRunEvent(type, messageEvent, source) {
           }),
         );
         scheduleRunRefresh();
+        void fetchAndRenderStageOutput({ silent: true });
         break;
       }
       case "asset_generated": {
@@ -578,20 +761,37 @@ async function loadRuns() {
     renderEvents();
     renderAssets();
     renderRunDetails();
+    localStorage.removeItem("storytovideo_activeRunId");
     return;
   }
 
+  // Try to restore saved run from localStorage
+  const savedRunId = localStorage.getItem("storytovideo_activeRunId");
+  if (savedRunId && state.runs.some((run) => run.id === savedRunId)) {
+    await setActiveRun(savedRunId);
+    return;
+  }
+
+  // If saved run doesn't exist, clean up stale localStorage entry
+  if (savedRunId) {
+    localStorage.removeItem("storytovideo_activeRunId");
+  }
+
+  // Fall back to most recent run
   await setActiveRun(state.runs[0].id);
 }
 
 async function setActiveRun(runId) {
   if (!runId) {
+    state.activeRunId = null;
+    localStorage.removeItem("storytovideo_activeRunId");
     return;
   }
 
   const changed = runId !== state.activeRunId;
   state.activeRunId = runId;
   elements.runSelect.value = runId;
+  localStorage.setItem("storytovideo_activeRunId", runId);
 
   if (changed) {
     state.assetsById = new Map();
@@ -646,6 +846,22 @@ async function handleSubmitInstruction(event) {
     setGlobalError("No active run selected.");
     return;
   }
+  if (!state.activeRun) {
+    setGlobalError("Run state is unavailable. Refresh and try again.");
+    return;
+  }
+  if (isRunActivelyExecuting(state.activeRun)) {
+    setGlobalError(
+      'Review controls are locked while run is executing. Interrupt and wait for status "awaiting review".',
+    );
+    renderRunDetails();
+    return;
+  }
+  if (!isRunReviewSafe(state.activeRun)) {
+    setGlobalError('Run is not in review-safe state. Controls unlock when status is "awaiting_review".');
+    renderRunDetails();
+    return;
+  }
 
   const instruction = elements.instructionText.value.trim();
   if (!instruction) {
@@ -682,13 +898,29 @@ async function handleSubmitInstruction(event) {
   } catch (error) {
     setGlobalError(`Failed to submit instruction: ${error.message}`);
   } finally {
-    elements.submitInstructionButton.disabled = false;
+    renderRunDetails();
   }
 }
 
 async function handleContinueClick() {
   if (!state.activeRunId) {
     setGlobalError("No active run selected.");
+    return;
+  }
+  if (!state.activeRun) {
+    setGlobalError("Run state is unavailable. Refresh and try again.");
+    return;
+  }
+  if (isRunActivelyExecuting(state.activeRun)) {
+    setGlobalError(
+      'Review controls are locked while run is executing. Interrupt and wait for status "awaiting review".',
+    );
+    renderRunDetails();
+    return;
+  }
+  if (!isRunReviewSafe(state.activeRun)) {
+    setGlobalError('Run is not in review-safe state. Controls unlock when status is "awaiting_review".');
+    renderRunDetails();
     return;
   }
 

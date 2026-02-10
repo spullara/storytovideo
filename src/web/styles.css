@@ -162,6 +162,27 @@ button:disabled {
   margin: 0;
 }
 
+.lock-message {
+  margin: 0.55rem 0 0.72rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 0.45rem 0.56rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.lock-message-locked {
+  border-color: #e7ccb0;
+  background: #fff5e8;
+  color: #7a4415;
+}
+
+.lock-message-ready {
+  border-color: #8dc8a6;
+  background: #ecf8f1;
+  color: #1c663f;
+}
+
 .run-meta > div,
 .review-meta > div {
   display: grid;
@@ -373,4 +394,78 @@ dd {
   .feed-list {
     max-height: 300px;
   }
+}
+
+/* Stage Output Styles */
+.stage-output-header {
+  margin-bottom: 1rem;
+}
+
+.stage-output-header h3 {
+  margin: 0 0 0.3rem;
+  font-size: 1.3rem;
+  color: var(--text);
+}
+
+.stage-output-section {
+  margin-top: 1.2rem;
+}
+
+.stage-output-section h4 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.stage-output-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.stage-output-table thead {
+  background: var(--panel-alt);
+}
+
+.stage-output-table th {
+  padding: 0.5rem;
+  text-align: left;
+  font-weight: 700;
+  color: var(--accent-strong);
+  border-bottom: 2px solid var(--border);
+}
+
+.stage-output-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.stage-output-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.scene-block {
+  margin-top: 1rem;
+  padding: 0.8rem;
+  background: var(--panel-alt);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.scene-block h5 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.scene-block .muted {
+  margin: 0.3rem 0;
+}
+
+.scene-shots-table {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
 }

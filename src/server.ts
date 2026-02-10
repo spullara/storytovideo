@@ -90,6 +90,7 @@ interface StateSnapshot {
   generatedFrames: Record<string, { start?: string; end?: string }>;
   generatedVideos: Record<string, string>;
   errors: PipelineState["errors"];
+  hasStoryAnalysis: boolean;
 }
 
 interface CreateRunRequest {
@@ -114,7 +115,9 @@ interface SubmitInstructionRequest {
 const RUN_DB_DIR = resolve(process.env.STORYTOVIDEO_RUN_DB_DIR ?? "./output/api-server");
 const RUN_DB_PATH = join(RUN_DB_DIR, "runs.json");
 const RUN_OUTPUT_ROOT = resolve(process.env.STORYTOVIDEO_RUN_OUTPUT_ROOT ?? "./output/runs");
+const SERVER_DIAGNOSTICS_PATH = join(RUN_DB_DIR, "server-diagnostics.ndjson");
 const WEB_ROOT = resolve(process.cwd(), "src", "web");
+const FATAL_SHUTDOWN_TIMEOUT_MS = 1_500;
 
 const WEB_ASSET_BY_PATH: Record<string, { filePath: string; contentType: string }> = {
   "/": {
@@ -200,6 +203,71 @@ const runStore = new RunStore(RUN_DB_PATH);
 const runEventStream = new RunEventStream();
 const stateSnapshotByRunId = new Map<string, StateSnapshot>();
 const stateMonitorByRunId = new Map<string, NodeJS.Timeout>();
+let shutdownReason: string | null = null;
+let shutdownInProgress = false;
+let processExitLogged = false;
+
+function normalizeDiagnosticValue(value: unknown): unknown {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+  }
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function appendServerDiagnostic(event: string, context: Record<string, unknown> = {}): void {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    pid: process.pid,
+    event,
+    ...context,
+  };
+
+  try {
+    mkdirSync(RUN_DB_DIR, { recursive: true });
+    writeFileSync(
+      SERVER_DIAGNOSTICS_PATH,
+      `${JSON.stringify(entry)}\n`,
+      { encoding: "utf-8", flag: "a" },
+    );
+  } catch (error) {
+    console.error("Failed to persist server diagnostics:", error);
+  }
+}
+
+function listActiveRunsForDiagnostics(): Array<{
+  runId: string;
+  status: RunStatus;
+  currentStage: string;
+  outputDir: string;
+}> {
+  return runStore
+    .list()
+    .filter((run) => run.status === "queued" || run.status === "running")
+    .map((run) => ({
+      runId: run.id,
+      status: run.status,
+      currentStage: run.currentStage,
+      outputDir: run.outputDir,
+    }));
+}
 
 function createInitialApiState(outputDir: string): PipelineState {
   return {
@@ -433,6 +501,7 @@ function toStateSnapshot(state: PipelineState): StateSnapshot {
     generatedFrames: cloneGeneratedFrames(state.generatedFrames),
     generatedVideos: { ...state.generatedVideos },
     errors: [...state.errors],
+    hasStoryAnalysis: Boolean(state.storyAnalysis),
   };
 }
 
@@ -483,6 +552,22 @@ function detectStateChanges(runId: string, state: PipelineState, previous: State
   }
 
   const fallbackTimestamp = state.lastSavedAt || new Date().toISOString();
+
+  // Emit story_analysis.json as a document asset when it becomes available
+  if (current.hasStoryAnalysis && !previous.hasStoryAnalysis) {
+    emitAssetEvent(
+      runId,
+      createAssetFeedItem({
+        runId,
+        outputDir: state.outputDir,
+        id: `${runId}-story-analysis`,
+        type: "document",
+        key: "story_analysis",
+        path: "story_analysis.json",
+        fallbackTimestamp,
+      }),
+    );
+  }
 
   for (const [assetKey, assetPath] of Object.entries(current.generatedAssets)) {
     if (previous.generatedAssets[assetKey] !== assetPath) {
@@ -652,6 +737,18 @@ function sendJson(res: ServerResponse, statusCode: number, payload: unknown): vo
   res.end(JSON.stringify(payload));
 }
 
+function isRunActivelyExecuting(status: RunStatus): boolean {
+  return status === "queued" || status === "running";
+}
+
+function sendRunMutationLockedResponse(res: ServerResponse, run: RunRecord): void {
+  sendJson(res, 409, {
+    error: "Run is actively executing; interrupt or wait for review-safe state before mutating",
+    code: "RUN_ACTIVE_LOCKED",
+    runStatus: run.status,
+  });
+}
+
 function setCorsHeaders(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID");
@@ -707,14 +804,32 @@ async function runInBackground(runId: string, resume = false): Promise<void> {
     pollRunState(runId);
     const message = error instanceof Error ? error.message : String(error);
     const state = loadState(record.outputDir);
+    const failedStage = state?.currentStage ?? record.currentStage;
+    const completedStages = state?.completedStages ?? record.completedStages;
+    const lifecycleContext = shutdownReason ? `shutdown:${shutdownReason}` : "running";
     runStore.patch(runId, {
       status: "failed",
       completedAt: new Date().toISOString(),
       error: message,
-      currentStage: state?.currentStage ?? record.currentStage,
-      completedStages: state?.completedStages ?? record.completedStages,
+      currentStage: failedStage,
+      completedStages,
     });
     emitRunStatusEvent(runId, "failed", message);
+    emitLogEvent(
+      runId,
+      `Run failed at stage ${failedStage} (source=pipeline_error lifecycle=${lifecycleContext}): ${message}`,
+      "error",
+    );
+    appendServerDiagnostic("run_failure", {
+      runId,
+      resume,
+      outputDir: record.outputDir,
+      stage: failedStage,
+      message,
+      lifecycleContext,
+      error: normalizeDiagnosticValue(error),
+      completedStages,
+    });
   } finally {
     stopRunStateMonitor(runId);
   }
@@ -764,6 +879,11 @@ async function handleSubmitInstruction(
 
   if (!run.options.reviewMode) {
     sendJson(res, 409, { error: "Run is not configured for review mode" });
+    return;
+  }
+
+  if (isRunActivelyExecuting(run.status)) {
+    sendRunMutationLockedResponse(res, run);
     return;
   }
 
@@ -830,8 +950,8 @@ async function handleContinueRun(
     return;
   }
 
-  if (run.status === "running" || run.status === "queued") {
-    sendJson(res, 409, { error: "Run is already in progress" });
+  if (isRunActivelyExecuting(run.status)) {
+    sendRunMutationLockedResponse(res, run);
     return;
   }
 
@@ -1013,6 +1133,29 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
       return;
     }
 
+    if (method === "GET" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "state") {
+      const runId = decodeURIComponent(pathParts[1]);
+      const run = runStore.get(runId);
+      if (!run) {
+        sendJson(res, 404, { error: `Run not found: ${runId}` });
+        return;
+      }
+
+      const state = loadState(run.outputDir);
+      if (!state) {
+        sendJson(res, 200, { storyAnalysis: null });
+        return;
+      }
+
+      sendJson(res, 200, {
+        storyAnalysis: state.storyAnalysis,
+        currentStage: state.currentStage,
+        completedStages: state.completedStages,
+        assetLibrary: state.assetLibrary,
+      });
+      return;
+    }
+
     if (method === "GET" && pathParts.length === 2 && pathParts[0] === "runs") {
       const runId = decodeURIComponent(pathParts[1]);
       const run = runStore.get(runId);
@@ -1039,6 +1182,183 @@ const server = createServer((req, res) => {
   void requestHandler(req, res);
 });
 
+function registerProcessLifecycleHandlers(apiServer: typeof server): void {
+  const initiateShutdown = (reason: string, exitCode: number): void => {
+    if (shutdownInProgress) {
+      return;
+    }
+    shutdownInProgress = true;
+    shutdownReason = reason;
+    appendServerDiagnostic("server_shutdown", {
+      reason,
+      exitCode,
+      activeRuns: listActiveRunsForDiagnostics(),
+    });
+
+    const exitTimer = setTimeout(() => {
+      process.exit(exitCode);
+    }, FATAL_SHUTDOWN_TIMEOUT_MS);
+    exitTimer.unref();
+
+    apiServer.close((error) => {
+      if (error) {
+        appendServerDiagnostic("server_shutdown_close_error", {
+          reason,
+          error: normalizeDiagnosticValue(error),
+        });
+      }
+      process.exit(exitCode);
+    });
+  };
+
+  process.on("SIGINT", () => {
+    initiateShutdown("signal:SIGINT", 130);
+  });
+
+  process.on("SIGTERM", () => {
+    initiateShutdown("signal:SIGTERM", 143);
+  });
+
+  process.on("uncaughtException", (error) => {
+    appendServerDiagnostic("fatal_uncaught_exception", {
+      reason: shutdownReason,
+      error: normalizeDiagnosticValue(error),
+      activeRuns: listActiveRunsForDiagnostics(),
+    });
+    initiateShutdown("fatal:uncaught_exception", 1);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    appendServerDiagnostic("fatal_unhandled_rejection", {
+      reason: shutdownReason,
+      rejection: normalizeDiagnosticValue(reason),
+      activeRuns: listActiveRunsForDiagnostics(),
+    });
+    initiateShutdown("fatal:unhandled_rejection", 1);
+  });
+
+  process.on("exit", (code) => {
+    if (processExitLogged) {
+      return;
+    }
+    processExitLogged = true;
+    appendServerDiagnostic("process_exit", {
+      code,
+      reason: shutdownReason ?? "process_exit",
+    });
+  });
+}
+
+async function resumeStaleRuns(): Promise<void> {
+  const allRuns = runStore.list();
+  const staleRuns = allRuns.filter(
+    (run) => run.status === "queued" || run.status === "running"
+  );
+
+  if (staleRuns.length === 0) {
+    console.log("[Recovery] No stale runs to recover");
+    return;
+  }
+
+  console.log(`[Recovery] Found ${staleRuns.length} stale run(s) to process`);
+  let recovered = 0;
+  let awaitingReview = 0;
+  let failed = 0;
+
+  for (const run of staleRuns) {
+    try {
+      const state = loadState(run.outputDir);
+
+      if (!state) {
+        // No state file found - mark as failed
+        runStore.patch(run.id, {
+          status: "failed",
+          completedAt: new Date().toISOString(),
+          error: "Server restarted; no saved state to resume from",
+        });
+        console.log(`[Recovery] Run ${run.id} marked failed — no state to resume`);
+        appendServerDiagnostic("run_recovery_failed", {
+          runId: run.id,
+          outputDir: run.outputDir,
+          reason: "no_state",
+        });
+        failed++;
+        continue;
+      }
+
+      if (state.awaitingUserReview) {
+        // Run was awaiting review - restore to awaiting_review status
+        runStore.patch(run.id, {
+          status: "awaiting_review",
+          currentStage: state.currentStage,
+          completedStages: state.completedStages,
+        });
+        console.log(`[Recovery] Run ${run.id} restored to awaiting_review`);
+        appendServerDiagnostic("run_recovery_awaiting_review", {
+          runId: run.id,
+          outputDir: run.outputDir,
+          currentStage: state.currentStage,
+        });
+        awaitingReview++;
+      } else {
+        // Run was in progress - resume execution
+        runStore.patch(run.id, {
+          status: "queued",
+          currentStage: state.currentStage,
+          completedStages: state.completedStages,
+        });
+        startRunStateMonitor(run.id);
+        setImmediate(() => {
+          void runInBackground(run.id, true);
+        });
+        console.log(`[Recovery] Run ${run.id} auto-resuming from last checkpoint`);
+        appendServerDiagnostic("run_recovery_resumed", {
+          runId: run.id,
+          outputDir: run.outputDir,
+          currentStage: state.currentStage,
+          completedStages: state.completedStages,
+        });
+        recovered++;
+      }
+    } catch (error) {
+      // Individual recovery failure shouldn't block others
+      const message = error instanceof Error ? error.message : String(error);
+      runStore.patch(run.id, {
+        status: "failed",
+        completedAt: new Date().toISOString(),
+        error: `Recovery failed: ${message}`,
+      });
+      console.error(`[Recovery] Failed to recover run ${run.id}:`, error);
+      appendServerDiagnostic("run_recovery_error", {
+        runId: run.id,
+        outputDir: run.outputDir,
+        error: normalizeDiagnosticValue(error),
+      });
+      failed++;
+    }
+  }
+
+  console.log(
+    `[Recovery] Processed ${staleRuns.length} stale runs: ${recovered} resumed, ${awaitingReview} awaiting review, ${failed} failed`
+  );
+  appendServerDiagnostic("run_recovery_complete", {
+    total: staleRuns.length,
+    resumed: recovered,
+    awaitingReview,
+    failed,
+  });
+}
+
+registerProcessLifecycleHandlers(server);
+
 server.listen(port, () => {
+  appendServerDiagnostic("server_startup", {
+    port,
+  });
   console.log(`API server listening on http://localhost:${port}`);
+
+  // Resume stale runs after server is ready
+  setImmediate(() => {
+    void resumeStaleRuns();
+  });
 });

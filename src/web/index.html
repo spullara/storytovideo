@@ -63,6 +63,9 @@
           <div><dt>Continue requested</dt><dd id="review-continue-state">no</dd></div>
           <div><dt>Pending instructions</dt><dd id="review-pending-count">0</dd></div>
         </dl>
+        <p id="review-lock-message" class="lock-message lock-message-locked">
+          Select a run to inspect review control lock state.
+        </p>
 
         <form id="instruction-form">
           <label for="instruction-text">Instruction</label>
@@ -83,6 +86,11 @@
     </section>
 
     <section class="panel panel-feed">
+      <section class="card" id="stage-output-section" style="display:none">
+        <h2>Stage Output</h2>
+        <div id="stage-output"></div>
+      </section>
+
       <section class="card">
         <h2>Event Feed</h2>
         <ul id="events-list" class="feed-list"></ul>
