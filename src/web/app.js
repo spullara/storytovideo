@@ -49,7 +49,6 @@ const elements = {
   submitInstructionButton: getElement("submit-instruction-button"),
   continueButton: getElement("continue-button"),
   eventsList: getElement("events-list"),
-  assetsList: getElement("assets-list"),
   stageOutputSection: getElement("stage-output-section"),
   stageOutput: getElement("stage-output"),
 };
@@ -94,6 +93,13 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+function findAsset(key) {
+  for (const asset of state.assetsById.values()) {
+    if (asset.key === key) return asset;
+  }
+  return null;
 }
 
 function isRunActivelyExecuting(run) {
@@ -336,103 +342,10 @@ function renderEvents() {
   }
 }
 
-function renderAssets() {
-  const items = [...state.assetsById.values()].sort((a, b) => {
-    if (a.createdAt === b.createdAt) {
-      return a.id.localeCompare(b.id);
-    }
-    return b.createdAt.localeCompare(a.createdAt);
-  });
-
-  elements.assetsList.replaceChildren();
-
-  if (items.length === 0) {
-    const empty = document.createElement("li");
-    empty.textContent = "No assets yet.";
-    elements.assetsList.append(empty);
-    return;
-  }
-
-  for (const asset of items) {
-    const item = document.createElement("li");
-
-    if (asset.type === "document") {
-      // Document assets get a special icon/preview
-      const preview = document.createElement("div");
-      preview.className = "asset-preview asset-preview-document";
-      preview.innerHTML = `
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-          <polyline points="10 9 9 9 8 9"></polyline>
-        </svg>
-      `;
-      item.append(preview);
-    } else if (asset.previewUrl) {
-      const isVideo = asset.type === "video" || asset.previewUrl.endsWith(".mp4") || asset.previewUrl.endsWith(".mov");
-      if (isVideo) {
-        const preview = document.createElement("video");
-        preview.className = "asset-preview";
-        preview.src = asset.previewUrl;
-        preview.controls = true;
-        preview.preload = "metadata";
-        item.append(preview);
-      } else {
-        const preview = document.createElement("img");
-        preview.className = "asset-preview";
-        preview.src = asset.previewUrl;
-        preview.alt = asset.key;
-        preview.loading = "lazy";
-        item.append(preview);
-      }
-    }
-
-    const content = document.createElement("div");
-    content.className = "asset-content";
-
-    const title = document.createElement("p");
-    title.className = "asset-title";
-    if (asset.type === "document") {
-      title.textContent = "Story Analysis";
-    } else {
-      title.textContent = `${asset.type}: ${asset.key}`;
-    }
-    content.append(title);
-
-    const meta = document.createElement("p");
-    meta.className = "asset-meta";
-    if (asset.type === "document") {
-      meta.textContent = `Document | ${formatTimestamp(asset.createdAt)}`;
-    } else {
-      const shot = asset.shotNumber !== undefined ? `shot ${asset.shotNumber}` : "run-level";
-      meta.textContent = `${shot} | ${formatTimestamp(asset.createdAt)}`;
-    }
-    content.append(meta);
-
-    const pathText = document.createElement("p");
-    pathText.className = "asset-meta";
-    pathText.textContent = asset.path;
-    content.append(pathText);
-
-    if (asset.previewUrl) {
-      const link = document.createElement("a");
-      link.className = "asset-link";
-      link.href = asset.previewUrl;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      if (asset.type === "document") {
-        link.textContent = "View JSON";
-      } else {
-        link.textContent = "Open media";
-      }
-      content.append(link);
-    }
-
-    item.append(content);
-    elements.assetsList.append(item);
-  }
+function renderStoryDocument() {
+  // Re-render the story document to show newly arrived assets
+  // This is called when new assets arrive via SSE or polling
+  void fetchAndRenderStageOutput({ silent: true });
 }
 
 function scheduleRunRefresh() {
@@ -485,7 +398,7 @@ async function refreshAssets({ silent = false } = {}) {
       }
     }
     state.assetsById = nextAssets;
-    renderAssets();
+    renderStoryDocument();
   } catch (error) {
     if (!silent) {
       setGlobalError(`Failed to fetch assets: ${error.message}`);
@@ -512,7 +425,7 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
       return;
     }
 
-    // Build the stage output HTML
+    // Build the unified story document HTML
     let html = "";
 
     // Title and art style
@@ -521,42 +434,66 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
     html += `<p class="muted">Art Style: ${escapeHtml(storyAnalysis.artStyle)}</p>`;
     html += `</div>`;
 
-    // Characters
+    // Characters with inline images
     if (storyAnalysis.characters && storyAnalysis.characters.length > 0) {
       html += `<div class="stage-output-section">`;
       html += `<h4>Characters</h4>`;
       html += `<table class="stage-output-table">`;
-      html += `<thead><tr><th>Name</th><th>Description</th><th>Age Range</th></tr></thead>`;
+      html += `<thead><tr><th>Name</th><th>Description</th><th>Age Range</th><th>Images</th></tr></thead>`;
       html += `<tbody>`;
       for (const char of storyAnalysis.characters) {
         html += `<tr>`;
         html += `<td><strong>${escapeHtml(char.name)}</strong></td>`;
         html += `<td>${escapeHtml(char.physicalDescription)}</td>`;
         html += `<td>${escapeHtml(char.ageRange)}</td>`;
+
+        // Look up character images
+        const frontAsset = findAsset(`character:${char.name}:front`);
+        const angleAsset = findAsset(`character:${char.name}:angle`);
+        let imagesHtml = "";
+        if (frontAsset || angleAsset) {
+          imagesHtml += `<div class="character-images">`;
+          if (frontAsset && frontAsset.previewUrl) {
+            imagesHtml += `<img src="${escapeHtml(frontAsset.previewUrl)}" alt="Front" class="inline-thumbnail" />`;
+          }
+          if (angleAsset && angleAsset.previewUrl) {
+            imagesHtml += `<img src="${escapeHtml(angleAsset.previewUrl)}" alt="Angle" class="inline-thumbnail" />`;
+          }
+          imagesHtml += `</div>`;
+        }
+        html += `<td>${imagesHtml}</td>`;
         html += `</tr>`;
       }
       html += `</tbody></table>`;
       html += `</div>`;
     }
 
-    // Locations
+    // Locations with inline images
     if (storyAnalysis.locations && storyAnalysis.locations.length > 0) {
       html += `<div class="stage-output-section">`;
       html += `<h4>Locations</h4>`;
       html += `<table class="stage-output-table">`;
-      html += `<thead><tr><th>Name</th><th>Description</th></tr></thead>`;
+      html += `<thead><tr><th>Name</th><th>Description</th><th>Image</th></tr></thead>`;
       html += `<tbody>`;
       for (const loc of storyAnalysis.locations) {
         html += `<tr>`;
         html += `<td><strong>${escapeHtml(loc.name)}</strong></td>`;
         html += `<td>${escapeHtml(loc.visualDescription)}</td>`;
+
+        // Look up location image
+        const locAsset = findAsset(`location:${loc.name}:front`);
+        let locImageHtml = "";
+        if (locAsset && locAsset.previewUrl) {
+          locImageHtml = `<img src="${escapeHtml(locAsset.previewUrl)}" alt="Location" class="inline-thumbnail" />`;
+        }
+        html += `<td>${locImageHtml}</td>`;
         html += `</tr>`;
       }
       html += `</tbody></table>`;
       html += `</div>`;
     }
 
-    // Scenes with shot breakdowns
+    // Scenes with shots and inline assets
     if (storyAnalysis.scenes && storyAnalysis.scenes.length > 0) {
       html += `<div class="stage-output-section">`;
       html += `<h4>Scenes</h4>`;
@@ -579,12 +516,51 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
             html += `<td>${shot.durationSeconds}s</td>`;
             html += `<td>${dialogue}</td>`;
             html += `</tr>`;
+
+            // Add shot assets row below the shot
+            const startFrameAsset = findAsset(`frame:${shot.shotNumber}:start`);
+            const endFrameAsset = findAsset(`frame:${shot.shotNumber}:end`);
+            const videoAsset = findAsset(`video:${shot.shotNumber}`);
+
+            if (startFrameAsset || endFrameAsset || videoAsset) {
+              html += `<tr><td colspan="4">`;
+              html += `<div class="shot-assets">`;
+              if (startFrameAsset && startFrameAsset.previewUrl) {
+                html += `<div class="shot-asset-item">`;
+                html += `<p class="shot-asset-label">Start Frame</p>`;
+                html += `<img src="${escapeHtml(startFrameAsset.previewUrl)}" alt="Start Frame" class="inline-thumbnail" />`;
+                html += `</div>`;
+              }
+              if (endFrameAsset && endFrameAsset.previewUrl) {
+                html += `<div class="shot-asset-item">`;
+                html += `<p class="shot-asset-label">End Frame</p>`;
+                html += `<img src="${escapeHtml(endFrameAsset.previewUrl)}" alt="End Frame" class="inline-thumbnail" />`;
+                html += `</div>`;
+              }
+              if (videoAsset && videoAsset.previewUrl) {
+                html += `<div class="shot-asset-item">`;
+                html += `<p class="shot-asset-label">Video</p>`;
+                html += `<video src="${escapeHtml(videoAsset.previewUrl)}" class="inline-video" controls preload="metadata"></video>`;
+                html += `</div>`;
+              }
+              html += `</div>`;
+              html += `</td></tr>`;
+            }
           }
           html += `</tbody></table>`;
         }
 
         html += `</div>`;
       }
+      html += `</div>`;
+    }
+
+    // Final video section (if assembly is complete)
+    const finalVideoAsset = findAsset("final.mp4");
+    if (finalVideoAsset && finalVideoAsset.previewUrl) {
+      html += `<div class="stage-output-section final-video-section">`;
+      html += `<h4>Final Video</h4>`;
+      html += `<video src="${escapeHtml(finalVideoAsset.previewUrl)}" class="final-video" controls preload="metadata"></video>`;
       html += `</div>`;
     }
 
@@ -674,7 +650,7 @@ function handleRunEvent(type, messageEvent, source) {
         const asset = payload.asset;
         if (asset && typeof asset.id === "string") {
           state.assetsById.set(asset.id, asset);
-          renderAssets();
+          renderStoryDocument();
           appendEvent(
             createEventEntry({
               title: "Asset generated",
@@ -772,7 +748,7 @@ async function loadRuns() {
     state.events = [];
     disconnectEventStream();
     renderEvents();
-    renderAssets();
+    renderStoryDocument();
     renderRunDetails();
     localStorage.removeItem("storytovideo_activeRunId");
     showCreateView();
@@ -812,7 +788,7 @@ async function setActiveRun(runId) {
   if (changed) {
     state.assetsById = new Map();
     state.events = [];
-    renderAssets();
+    renderStoryDocument();
     renderEvents();
   }
 
@@ -1042,7 +1018,7 @@ function initialize() {
   populateInstructionStageSelect();
   renderStageProgress();
   renderEvents();
-  renderAssets();
+  renderStoryDocument();
   renderRunDetails();
   bindEvents();
   startPollingFallback();
