@@ -1252,7 +1252,7 @@ function registerProcessLifecycleHandlers(apiServer: typeof server): void {
 async function resumeStaleRuns(): Promise<void> {
   const allRuns = runStore.list();
   const staleRuns = allRuns.filter(
-    (run) => run.status === "queued" || run.status === "running"
+    (run) => run.status === "queued" || run.status === "running" || run.status === "awaiting_review"
   );
 
   if (staleRuns.length === 0) {
