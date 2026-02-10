@@ -48,6 +48,7 @@ const elements = {
   instructionStage: getElement("instruction-stage"),
   submitInstructionButton: getElement("submit-instruction-button"),
   continueButton: getElement("continue-button"),
+  retryButton: getElement("retry-button"),
   eventsList: getElement("events-list"),
   stageOutputSection: getElement("stage-output-section"),
   stageOutput: getElement("stage-output"),
@@ -239,6 +240,7 @@ function renderRunDetails() {
     elements.instructionText.disabled = true;
     elements.instructionStage.disabled = true;
     elements.continueButton.disabled = true;
+    elements.retryButton.disabled = true;
     setReviewLockMessage("Select a run to inspect review control lock state.");
     renderStageProgress();
     return;
@@ -269,7 +271,15 @@ function renderRunDetails() {
     setReviewLockMessage(
       "Review controls are locked while this run is executing (queued/running). Interrupt and wait for status \"awaiting review\" to unlock.",
     );
+    elements.retryButton.disabled = true;
+  } else if (run.status === "failed") {
+    elements.retryButton.disabled = false;
+    setReviewLockMessage(
+      "Run failed. Use Retry to resume from last checkpoint.",
+      "locked",
+    );
   } else if (reviewSafe) {
+    elements.retryButton.disabled = true;
     if (continueRequested) {
       setReviewLockMessage(
         "Run is in review-safe state. Continue has already been requested; you can still submit instructions.",
@@ -282,6 +292,7 @@ function renderRunDetails() {
       );
     }
   } else {
+    elements.retryButton.disabled = true;
     setReviewLockMessage(
       `Review controls are unavailable while status is \"${formatStageLabel(run.status)}\". Controls unlock when status returns to \"awaiting review\" (including after interrupt).`,
     );
@@ -961,6 +972,36 @@ async function handleContinueClick() {
   }
 }
 
+async function handleRetryClick() {
+  if (!state.activeRunId) {
+    setGlobalError("No active run selected.");
+    return;
+  }
+  if (!state.activeRun || state.activeRun.status !== "failed") {
+    setGlobalError("Only failed runs can be retried.");
+    return;
+  }
+
+  elements.retryButton.disabled = true;
+  try {
+    await requestJson(`/runs/${encodeURIComponent(state.activeRunId)}/retry`, {
+      method: "POST",
+      body: "{}",
+    });
+    appendEvent(
+      createEventEntry({
+        title: "Run retry",
+        message: "Retrying from last checkpoint",
+      }),
+    );
+    setGlobalError("");
+  } catch (error) {
+    setGlobalError(`Failed to retry run: ${error.message}`);
+  } finally {
+    renderRunDetails();
+  }
+}
+
 function startPollingFallback() {
   if (state.pollTimer) {
     clearInterval(state.pollTimer);
@@ -1002,6 +1043,10 @@ function bindEvents() {
 
   elements.continueButton.addEventListener("click", () => {
     void handleContinueClick();
+  });
+
+  elements.retryButton.addEventListener("click", () => {
+    void handleRetryClick();
   });
 
   window.addEventListener("beforeunload", () => {

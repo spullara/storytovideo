@@ -955,6 +955,44 @@ async function handleSubmitInstruction(
   });
 }
 
+async function handleRetryRun(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  runId: string,
+): Promise<void> {
+  const run = runStore.get(runId);
+  if (!run) {
+    sendJson(res, 404, { error: `Run not found: ${runId}` });
+    return;
+  }
+
+  if (run.status !== "failed") {
+    sendJson(res, 409, { error: "Only failed runs can be retried" });
+    return;
+  }
+
+  const state = loadState(run.outputDir);
+  if (!state) {
+    sendJson(res, 409, { error: "No saved state available for retry" });
+    return;
+  }
+
+  const updatedRecord = runStore.patch(runId, {
+    status: "queued",
+    completedAt: undefined,
+    error: undefined,
+  }) ?? run;
+
+  emitRunStatusEvent(runId, "queued");
+  emitLogEvent(runId, "Retrying run from last checkpoint");
+  startRunStateMonitor(runId);
+  setImmediate(() => {
+    void runInBackground(runId, true);
+  });
+
+  sendJson(res, 200, { run: toRunResponse(updatedRecord) });
+}
+
 async function handleContinueRun(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1088,6 +1126,12 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
     if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "continue") {
       const runId = decodeURIComponent(pathParts[1]);
       await handleContinueRun(req, res, runId);
+      return;
+    }
+
+    if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "retry") {
+      const runId = decodeURIComponent(pathParts[1]);
+      await handleRetryRun(req, res, runId);
       return;
     }
 
