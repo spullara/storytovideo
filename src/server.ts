@@ -9,9 +9,22 @@ import {
   writeFileSync,
 } from "fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
-import { extname, isAbsolute, join, relative, resolve, sep } from "path";
+import { join, resolve } from "path";
 
 import { runPipeline } from "./orchestrator";
+import {
+  buildAssetFeed as buildAssetFeedFromState,
+  createAssetFeedItem as createAssetFeedItemFromState,
+  detectMimeType as detectMimeTypeFromPath,
+  resolveMediaPathForRun as resolveMediaPathForOutputDir,
+  type AssetFeedItem,
+  type AssetFeedItemInput,
+} from "./server-assets";
+import {
+  RunEventStream,
+  type RunEventLevel,
+  type RunEventType,
+} from "./server-events";
 import { loadState, saveState } from "./tools/state";
 import type { PipelineOptions, PipelineState } from "./types";
 
@@ -24,24 +37,9 @@ const STAGE_ORDER = [
   "assembly",
 ] as const;
 
-const MIME_TYPES: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".mp4": "video/mp4",
-  ".mov": "video/quicktime",
-  ".json": "application/json; charset=utf-8",
-};
-
-const EVENT_HISTORY_LIMIT = 2_000;
 const STATE_POLL_INTERVAL_MS = 750;
-const SSE_HEARTBEAT_MS = 15_000;
 
 type RunStatus = "queued" | "running" | "awaiting_review" | "completed" | "failed";
-type AssetFeedItemType = "asset" | "frame_start" | "frame_end" | "video";
-type RunEventLevel = "info" | "error";
-type RunEventType = "run_status" | "stage_transition" | "stage_completed" | "asset_generated" | "log";
 
 interface RunRecord {
   id: string;
@@ -83,26 +81,6 @@ interface RunResponse {
   error?: string;
   options: PipelineOptions;
   review: ReviewState;
-}
-
-interface AssetFeedItem {
-  id: string;
-  runId: string;
-  type: AssetFeedItemType;
-  key: string;
-  shotNumber?: number;
-  variant?: string;
-  path: string;
-  previewUrl?: string;
-  createdAt: string;
-}
-
-interface RunEvent {
-  id: number;
-  runId: string;
-  type: RunEventType;
-  timestamp: string;
-  payload: Record<string, unknown>;
 }
 
 interface StateSnapshot {
@@ -199,9 +177,7 @@ class RunStore {
 }
 
 const runStore = new RunStore(RUN_DB_PATH);
-const runEventsByRunId = new Map<string, RunEvent[]>();
-const eventSequenceByRunId = new Map<string, number>();
-const eventClientsByRunId = new Map<string, Set<ServerResponse>>();
+const runEventStream = new RunEventStream();
 const stateSnapshotByRunId = new Map<string, StateSnapshot>();
 const stateMonitorByRunId = new Map<string, NodeJS.Timeout>();
 
@@ -300,6 +276,15 @@ function parseStageName(value: unknown, fieldName: string): string {
     );
   }
   return value;
+}
+
+function getNextPendingStage(state: PipelineState): string | null {
+  for (const stage of STAGE_ORDER) {
+    if (!state.completedStages.includes(stage)) {
+      return stage;
+    }
+  }
+  return null;
 }
 
 function parseSubmitInstructionRequest(body: unknown): SubmitInstructionRequest {
@@ -431,60 +416,12 @@ function toStateSnapshot(state: PipelineState): StateSnapshot {
   };
 }
 
-function sanitizeGeneratedPath(pathValue: string): string {
-  return pathValue.replace(/^\[dry-run\]\s*/, "");
+function createAssetFeedItem(params: AssetFeedItemInput): AssetFeedItem {
+  return createAssetFeedItemFromState(params);
 }
 
-function resolveGeneratedPath(outputDir: string, pathValue: string): string | null {
-  if (pathValue.startsWith("[dry-run]")) {
-    return null;
-  }
-
-  const sanitized = sanitizeGeneratedPath(pathValue);
-  const candidate = isAbsolute(sanitized) ? resolve(sanitized) : resolve(outputDir, sanitized);
-
-  if (!existsSync(candidate)) {
-    return null;
-  }
-  return candidate;
-}
-
-function toRunRelativePath(outputDir: string, filePath: string): string | null {
-  const runRoot = resolve(outputDir);
-  const candidate = resolve(filePath);
-  const runRootPrefix = `${runRoot}${sep}`;
-  if (candidate !== runRoot && !candidate.startsWith(runRootPrefix)) {
-    return null;
-  }
-
-  const rel = relative(runRoot, candidate);
-  return rel.split(sep).join("/");
-}
-
-function toPreviewUrl(runId: string, outputDir: string, filePath: string): string | undefined {
-  const rel = toRunRelativePath(outputDir, filePath);
-  if (!rel || rel.length === 0) {
-    return undefined;
-  }
-
-  const encodedPath = rel
-    .split("/")
-    .filter((segment) => segment.length > 0)
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-  return `/runs/${encodeURIComponent(runId)}/media/${encodedPath}`;
-}
-
-function toTimestamp(filePath: string | null, fallback: string): string {
-  if (!filePath) {
-    return fallback;
-  }
-
-  try {
-    return statSync(filePath).mtime.toISOString();
-  } catch {
-    return fallback;
-  }
+function buildAssetFeed(runId: string, state: PipelineState): AssetFeedItem[] {
+  return buildAssetFeedFromState(runId, state);
 }
 
 function parseAssetVariant(assetKey: string): string | undefined {
@@ -492,188 +429,20 @@ function parseAssetVariant(assetKey: string): string | undefined {
   return parts.length >= 3 ? parts[2] : undefined;
 }
 
-function createAssetFeedItem(params: {
-  runId: string;
-  outputDir: string;
-  id: string;
-  type: AssetFeedItemType;
-  key: string;
-  path: string;
-  shotNumber?: number;
-  variant?: string;
-  fallbackTimestamp: string;
-}): AssetFeedItem {
-  const {
-    runId,
-    outputDir,
-    id,
-    type,
-    key,
-    path,
-    shotNumber,
-    variant,
-    fallbackTimestamp,
-  } = params;
-
-  const absolutePath = resolveGeneratedPath(outputDir, path);
-  return {
-    id,
-    runId,
-    type,
-    key,
-    shotNumber,
-    variant,
-    path,
-    previewUrl: absolutePath ? toPreviewUrl(runId, outputDir, absolutePath) : undefined,
-    createdAt: toTimestamp(absolutePath, fallbackTimestamp),
-  };
-}
-
-function buildAssetFeed(runId: string, state: PipelineState): AssetFeedItem[] {
-  const fallbackTimestamp = state.lastSavedAt || new Date().toISOString();
-  const items: AssetFeedItem[] = [];
-
-  for (const [assetKey, assetPath] of Object.entries(state.generatedAssets)) {
-    items.push(
-      createAssetFeedItem({
-        runId,
-        outputDir: state.outputDir,
-        id: `asset:${assetKey}`,
-        type: "asset",
-        key: assetKey,
-        path: assetPath,
-        variant: parseAssetVariant(assetKey),
-        fallbackTimestamp,
-      }),
-    );
-  }
-
-  for (const [shotKey, frameSet] of Object.entries(state.generatedFrames)) {
-    const shotNumber = Number(shotKey);
-    if (frameSet?.start) {
-      items.push(
-        createAssetFeedItem({
-          runId,
-          outputDir: state.outputDir,
-          id: `frame:${shotKey}:start`,
-          type: "frame_start",
-          key: `frame:${shotKey}:start`,
-          path: frameSet.start,
-          shotNumber,
-          variant: "start",
-          fallbackTimestamp,
-        }),
-      );
-    }
-    if (frameSet?.end) {
-      items.push(
-        createAssetFeedItem({
-          runId,
-          outputDir: state.outputDir,
-          id: `frame:${shotKey}:end`,
-          type: "frame_end",
-          key: `frame:${shotKey}:end`,
-          path: frameSet.end,
-          shotNumber,
-          variant: "end",
-          fallbackTimestamp,
-        }),
-      );
-    }
-  }
-
-  for (const [shotKey, videoPath] of Object.entries(state.generatedVideos)) {
-    items.push(
-      createAssetFeedItem({
-        runId,
-        outputDir: state.outputDir,
-        id: `video:${shotKey}`,
-        type: "video",
-        key: `video:${shotKey}`,
-        path: videoPath,
-        shotNumber: Number(shotKey),
-        fallbackTimestamp,
-      }),
-    );
-  }
-
-  items.sort((a, b) => {
-    const byTimestamp = a.createdAt.localeCompare(b.createdAt);
-    if (byTimestamp !== 0) {
-      return byTimestamp;
-    }
-    return a.id.localeCompare(b.id);
-  });
-
-  return items;
-}
-
-function nextEventId(runId: string): number {
-  const next = (eventSequenceByRunId.get(runId) ?? 0) + 1;
-  eventSequenceByRunId.set(runId, next);
-  return next;
-}
-
-function writeSseEvent(res: ServerResponse, event: RunEvent): void {
-  res.write(`id: ${event.id}\n`);
-  res.write(`event: ${event.type}\n`);
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
-}
-
 function emitRunEvent(runId: string, type: RunEventType, payload: Record<string, unknown>): void {
-  const event: RunEvent = {
-    id: nextEventId(runId),
-    runId,
-    type,
-    timestamp: new Date().toISOString(),
-    payload,
-  };
-
-  const history = runEventsByRunId.get(runId) ?? [];
-  history.push(event);
-  if (history.length > EVENT_HISTORY_LIMIT) {
-    history.splice(0, history.length - EVENT_HISTORY_LIMIT);
-  }
-  runEventsByRunId.set(runId, history);
-
-  const clients = eventClientsByRunId.get(runId);
-  if (!clients) {
-    return;
-  }
-
-  for (const client of [...clients]) {
-    if (client.writableEnded) {
-      clients.delete(client);
-      continue;
-    }
-    writeSseEvent(client, event);
-  }
-
-  if (clients.size === 0) {
-    eventClientsByRunId.delete(runId);
-  }
+  runEventStream.emitRunEvent(runId, type, payload);
 }
 
 function emitLogEvent(runId: string, message: string, level: RunEventLevel = "info"): void {
-  emitRunEvent(runId, "log", {
-    level,
-    message,
-  });
+  runEventStream.emitLogEvent(runId, message, level);
 }
 
 function emitRunStatusEvent(runId: string, status: RunStatus, error?: string): void {
-  emitRunEvent(runId, "run_status", {
-    status,
-    ...(error ? { error } : {}),
-  });
-  const suffix = error ? `: ${error}` : "";
-  emitLogEvent(runId, `Run status changed to ${status}${suffix}`, status === "failed" ? "error" : "info");
+  runEventStream.emitRunStatusEvent(runId, status, error);
 }
 
 function emitAssetEvent(runId: string, item: AssetFeedItem): void {
-  emitRunEvent(runId, "asset_generated", {
-    asset: item,
-  });
+  runEventStream.emitAssetEvent(runId, item);
 }
 
 function detectStateChanges(runId: string, state: PipelineState, previous: StateSnapshot, current: StateSnapshot): void {
@@ -823,18 +592,6 @@ function stopRunStateMonitor(runId: string): void {
   stateSnapshotByRunId.delete(runId);
 }
 
-function parseLastEventId(req: IncomingMessage, url: URL): number | undefined {
-  const headerValue = req.headers["last-event-id"];
-  const rawHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  const raw = rawHeader ?? url.searchParams.get("lastEventId") ?? undefined;
-  if (!raw) {
-    return undefined;
-  }
-
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function streamRunEvents(req: IncomingMessage, res: ServerResponse, runId: string, url: URL): void {
   const run = runStore.get(runId);
   if (!run) {
@@ -842,71 +599,15 @@ function streamRunEvents(req: IncomingMessage, res: ServerResponse, runId: strin
     return;
   }
 
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  res.write("retry: 2000\n\n");
-
-  const clients = eventClientsByRunId.get(runId) ?? new Set<ServerResponse>();
-  clients.add(res);
-  eventClientsByRunId.set(runId, clients);
-
-  const lastEventId = parseLastEventId(req, url);
-  const history = runEventsByRunId.get(runId) ?? [];
-  for (const event of history) {
-    if (lastEventId === undefined || event.id > lastEventId) {
-      writeSseEvent(res, event);
-    }
-  }
-
-  res.write(
-    `event: connected\ndata: ${JSON.stringify({ runId, timestamp: new Date().toISOString() })}\n\n`,
-  );
-
-  const heartbeat = setInterval(() => {
-    if (!res.writableEnded) {
-      res.write(`: heartbeat ${Date.now()}\n\n`);
-    }
-  }, SSE_HEARTBEAT_MS);
-
-  const cleanup = (): void => {
-    clearInterval(heartbeat);
-    const existingClients = eventClientsByRunId.get(runId);
-    if (!existingClients) {
-      return;
-    }
-    existingClients.delete(res);
-    if (existingClients.size === 0) {
-      eventClientsByRunId.delete(runId);
-    }
-  };
-
-  req.on("close", cleanup);
-  req.on("error", cleanup);
+  runEventStream.streamRunEvents(req, res, runId, url);
 }
 
 function resolveMediaPathForRun(run: RunRecord, encodedSegments: string[]): string | null {
-  if (encodedSegments.length === 0) {
-    return null;
-  }
-
-  const decodedPath = encodedSegments
-    .map((segment) => decodeURIComponent(segment))
-    .join("/");
-  const candidate = resolve(run.outputDir, decodedPath);
-  const runRoot = resolve(run.outputDir);
-  const runRootPrefix = `${runRoot}${sep}`;
-
-  if (candidate !== runRoot && !candidate.startsWith(runRootPrefix)) {
-    return null;
-  }
-  return candidate;
+  return resolveMediaPathForOutputDir(run.outputDir, encodedSegments);
 }
 
 function detectMimeType(filePath: string): string {
-  return MIME_TYPES[extname(filePath).toLowerCase()] ?? "application/octet-stream";
+  return detectMimeTypeFromPath(filePath);
 }
 
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
@@ -921,7 +622,7 @@ function setCorsHeaders(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
 }
 
-async function runInBackground(runId: string): Promise<void> {
+async function runInBackground(runId: string, resume = false): Promise<void> {
   const record = runStore.get(runId);
   if (!record) {
     return;
@@ -937,7 +638,10 @@ async function runInBackground(runId: string): Promise<void> {
   startRunStateMonitor(runId);
 
   try {
-    await runPipeline(record.storyText, record.options);
+    const pipelineOptions = resume
+      ? { ...record.options, resume: true }
+      : record.options;
+    await runPipeline(record.storyText, pipelineOptions);
     pollRunState(runId);
     const state = loadState(record.outputDir);
     const currentStage = state?.currentStage ?? record.currentStage;
@@ -1041,7 +745,11 @@ async function handleSubmitInstruction(
   const parsedBody = await readJsonBody(req);
   const parsedRequest = parseSubmitInstructionRequest(parsedBody);
   const stage =
-    parsedRequest.stage ?? parseStageName(state.currentStage, "current stage");
+    parsedRequest.stage ?? getNextPendingStage(state);
+  if (!stage) {
+    sendJson(res, 409, { error: "No pending stage available for instruction" });
+    return;
+  }
   const submittedAt = new Date().toISOString();
 
   const nextInstructions = state.pendingStageInstructions[stage] ?? [];
@@ -1137,7 +845,7 @@ async function handleContinueRun(
   emitLogEvent(runId, `Continue requested for stage ${stage}`);
   startRunStateMonitor(runId);
   setImmediate(() => {
-    void runInBackground(runId);
+    void runInBackground(runId, true);
   });
 
   sendJson(res, 202, {
