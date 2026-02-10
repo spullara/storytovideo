@@ -38,7 +38,7 @@ const EVENT_HISTORY_LIMIT = 2_000;
 const STATE_POLL_INTERVAL_MS = 750;
 const SSE_HEARTBEAT_MS = 15_000;
 
-type RunStatus = "queued" | "running" | "completed" | "failed";
+type RunStatus = "queued" | "running" | "awaiting_review" | "completed" | "failed";
 type AssetFeedItemType = "asset" | "frame_start" | "frame_end" | "video";
 type RunEventLevel = "info" | "error";
 type RunEventType = "run_status" | "stage_transition" | "stage_completed" | "asset_generated" | "log";
@@ -63,6 +63,13 @@ interface Progress {
   percent: number;
 }
 
+interface ReviewState {
+  awaitingUserReview: boolean;
+  continueRequested: boolean;
+  pendingInstructionCount: number;
+  pendingInstructions: string[];
+}
+
 interface RunResponse {
   id: string;
   status: RunStatus;
@@ -75,6 +82,7 @@ interface RunResponse {
   completedAt?: string;
   error?: string;
   options: PipelineOptions;
+  review: ReviewState;
 }
 
 interface AssetFeedItem {
@@ -118,6 +126,11 @@ interface CreateRunRequest {
     verbose?: boolean;
     reviewMode?: boolean;
   };
+}
+
+interface SubmitInstructionRequest {
+  instruction: string;
+  stage?: string;
 }
 
 const RUN_DB_DIR = resolve(process.env.STORYTOVIDEO_RUN_DB_DIR ?? "./output/api-server");
@@ -272,8 +285,43 @@ function parseCreateRunRequest(body: unknown): CreateRunRequest {
       skipTo,
       resume: parseBoolean(options.resume, false),
       verbose: parseBoolean(options.verbose, false),
-      reviewMode: parseBoolean(options.reviewMode, false),
+      reviewMode: parseBoolean(options.reviewMode, true),
     },
+  };
+}
+
+function parseStageName(value: unknown, fieldName: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`${fieldName} must be a string`);
+  }
+  if (!STAGE_ORDER.includes(value as (typeof STAGE_ORDER)[number])) {
+    throw new Error(
+      `${fieldName} must be one of: ${STAGE_ORDER.join(", ")}`,
+    );
+  }
+  return value;
+}
+
+function parseSubmitInstructionRequest(body: unknown): SubmitInstructionRequest {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new Error("Request body must be a JSON object");
+  }
+
+  const request = body as Record<string, unknown>;
+  const instruction = request.instruction;
+  if (typeof instruction !== "string" || instruction.trim().length === 0) {
+    throw new Error("instruction is required and must be a non-empty string");
+  }
+
+  const stageValue = request.stage;
+  if (stageValue === undefined) {
+    return { instruction: instruction.trim() };
+  }
+
+  const stage = parseStageName(stageValue, "stage");
+  return {
+    instruction: instruction.trim(),
+    stage,
   };
 }
 
@@ -317,7 +365,7 @@ function buildPipelineOptions(request: CreateRunRequest, runId: string): Pipelin
     skipTo: options.skipTo,
     resume: options.resume ?? false,
     verbose: options.verbose ?? false,
-    reviewMode: options.reviewMode ?? false,
+    reviewMode: options.reviewMode ?? true,
   };
 }
 
@@ -335,6 +383,8 @@ function toRunResponse(record: RunRecord): RunResponse {
   const state = loadState(record.outputDir);
   const currentStage = state?.currentStage ?? record.currentStage;
   const completedStages = state?.completedStages ?? record.completedStages;
+  const pendingInstructions =
+    state?.pendingStageInstructions[currentStage] ?? [];
 
   return {
     id: record.id,
@@ -348,6 +398,12 @@ function toRunResponse(record: RunRecord): RunResponse {
     completedAt: record.completedAt,
     error: record.error,
     options: record.options,
+    review: {
+      awaitingUserReview: state?.awaitingUserReview ?? false,
+      continueRequested: state?.continueRequested ?? false,
+      pendingInstructionCount: pendingInstructions.length,
+      pendingInstructions,
+    },
   };
 }
 
@@ -884,11 +940,27 @@ async function runInBackground(runId: string): Promise<void> {
     await runPipeline(record.storyText, record.options);
     pollRunState(runId);
     const state = loadState(record.outputDir);
+    const currentStage = state?.currentStage ?? record.currentStage;
+    const completedStages = state?.completedStages ?? record.completedStages;
+    const isAwaitingReview = Boolean(record.options.reviewMode && state?.awaitingUserReview);
+
+    if (isAwaitingReview) {
+      runStore.patch(runId, {
+        status: "awaiting_review",
+        completedAt: undefined,
+        currentStage,
+        completedStages,
+      });
+      emitRunStatusEvent(runId, "awaiting_review");
+      emitLogEvent(runId, `Awaiting user review before stage ${currentStage}`);
+      return;
+    }
+
     runStore.patch(runId, {
       status: "completed",
       completedAt: new Date().toISOString(),
-      currentStage: state?.currentStage ?? record.currentStage,
-      completedStages: state?.completedStages ?? record.completedStages,
+      currentStage,
+      completedStages,
     });
     emitRunStatusEvent(runId, "completed");
   } catch (error) {
