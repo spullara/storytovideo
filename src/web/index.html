@@ -7,36 +7,24 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <main class="layout">
-    <section class="panel panel-controls">
-      <header class="panel-header">
+  <header class="top-bar">
+    <div class="top-bar-content">
+      <div class="top-bar-left">
         <p class="eyebrow">Wave 2</p>
         <h1>Run Console</h1>
-        <p class="muted">Submit stories, review each stage, and continue with guidance.</p>
-      </header>
+      </div>
+      <div class="top-bar-controls">
+        <select id="run-select" aria-label="Select run"></select>
+        <button id="new-run-button" type="button">New Run</button>
+        <button id="refresh-runs-button" type="button">Refresh</button>
+      </div>
+    </div>
+  </header>
 
-      <section class="card">
-        <h2>Create Run</h2>
-        <form id="create-run-form">
-          <label for="story-text">Story text</label>
-          <textarea
-            id="story-text"
-            name="storyText"
-            rows="7"
-            placeholder="Paste a short story here..."
-            required
-          ></textarea>
-          <button id="create-run-button" type="submit">Start run</button>
-        </form>
-      </section>
-
-      <section class="card">
-        <h2>Run Selection</h2>
-        <div class="inline-row">
-          <select id="run-select" aria-label="Select run"></select>
-          <button id="refresh-runs-button" type="button">Refresh</button>
-        </div>
-      </section>
+  <main class="layout">
+    <!-- Run Viewer (default view) -->
+    <div id="run-view" class="view-container">
+      <section class="panel panel-controls">
 
       <section class="card">
         <h2>Run State</h2>
@@ -101,6 +89,28 @@
         <ul id="assets-list" class="asset-grid"></ul>
       </section>
     </section>
+    </div>
+
+    <!-- Create Run View -->
+    <div id="create-view" class="view-container" style="display: none;">
+      <section class="create-view-content">
+        <div class="card create-run-card">
+          <h2>Create New Run</h2>
+          <p class="muted">Submit a story to start a new video generation run.</p>
+          <form id="create-run-form">
+            <label for="story-text">Story text</label>
+            <textarea
+              id="story-text"
+              name="storyText"
+              rows="12"
+              placeholder="Paste a short story here..."
+              required
+            ></textarea>
+            <button id="create-run-button" type="submit">Start run</button>
+          </form>
+        </div>
+      </section>
+    </div>
   </main>
 
   <script type="module" src="/app.js"></script>

@@ -23,6 +23,9 @@ const state = {
 };
 
 const elements = {
+  runView: getElement("run-view"),
+  createView: getElement("create-view"),
+  newRunButton: getElement("new-run-button"),
   createRunForm: getElement("create-run-form"),
   storyText: getElement("story-text"),
   createRunButton: getElement("create-run-button"),
@@ -57,6 +60,16 @@ function getElement(id) {
     throw new Error(`Missing required element: ${id}`);
   }
   return element;
+}
+
+function showRunView() {
+  elements.runView.style.display = "";
+  elements.createView.style.display = "none";
+}
+
+function showCreateView() {
+  elements.runView.style.display = "none";
+  elements.createView.style.display = "";
 }
 
 function formatStageLabel(stage) {
@@ -762,8 +775,11 @@ async function loadRuns() {
     renderAssets();
     renderRunDetails();
     localStorage.removeItem("storytovideo_activeRunId");
+    showCreateView();
     return;
   }
+
+  showRunView();
 
   // Try to restore saved run from localStorage
   const savedRunId = localStorage.getItem("storytovideo_activeRunId");
@@ -833,6 +849,7 @@ async function handleCreateRunSubmit(event) {
       }),
     );
     setGlobalError("");
+    showRunView();
   } catch (error) {
     setGlobalError(`Failed to create run: ${error.message}`);
   } finally {
@@ -984,6 +1001,10 @@ function startPollingFallback() {
 }
 
 function bindEvents() {
+  elements.newRunButton.addEventListener("click", () => {
+    showCreateView();
+  });
+
   elements.createRunForm.addEventListener("submit", (event) => {
     void handleCreateRunSubmit(event);
   });
