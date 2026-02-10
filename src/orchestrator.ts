@@ -549,14 +549,45 @@ async function runAssemblyStage(
     return state;
   }
 
-  const systemPrompt = `You are a video assembly agent. Assemble all generated video clips into a single final video.
+  // Extract transitions from scenes
+  // Build a map of scene number to transition type
+  const sceneTransitions: Record<number, string> = {};
+  for (const scene of state.storyAnalysis.scenes) {
+    sceneTransitions[scene.sceneNumber] = scene.transition || "cut";
+  }
 
-Call assembleVideo with the ordered list of video paths. Then call saveState to checkpoint.
+  // Build transitions array: one per scene boundary
+  // transitions[i] is the transition BEFORE the first video of scene i+2
+  const transitions: Array<{ type: "cut" | "fade_black" | "cross_dissolve" | "fade_white" | "wipe_left"; durationMs: number }> = [];
+
+  for (let i = 0; i < sortedShots.length - 1; i++) {
+    const currentShot = sortedShots[i];
+    const nextShot = sortedShots[i + 1];
+
+    // Check if we're crossing a scene boundary
+    if (nextShot.sceneNumber !== currentShot.sceneNumber) {
+      // Add transition for the next scene
+      const nextSceneTransition = sceneTransitions[nextShot.sceneNumber] || "cut";
+      const durationMs = nextSceneTransition === "fade_black" ? 750 : 500;
+      transitions.push({
+        type: nextSceneTransition as "cut" | "fade_black" | "cross_dissolve" | "fade_white" | "wipe_left",
+        durationMs,
+      });
+    }
+  }
+
+  const systemPrompt = `You are a video assembly agent. Assemble all generated video clips into a single final video with scene transitions.
+
+Scene transitions from the shot plan:
+${JSON.stringify(state.storyAnalysis.scenes.map(s => ({ scene: s.sceneNumber, transition: s.transition || "cut" })))}
+
+Call assembleVideo with the ordered list of video paths and the transitions array. Then call saveState to checkpoint.
 
 Video paths (in order): ${JSON.stringify(videoPaths)}
+Transitions (one per scene boundary): ${JSON.stringify(transitions)}
 Output directory: "${options.outputDir}"`;
 
-  const userPrompt = `Assemble ${videoPaths.length} video clips into the final video.`;
+  const userPrompt = `Assemble ${videoPaths.length} video clips into the final video with ${transitions.length} scene transitions.`;
 
   const assemblyTools = {
     assembleVideo: {

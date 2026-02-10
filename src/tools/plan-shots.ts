@@ -24,6 +24,7 @@ const shotSchema = z.object({
 const sceneShotsSchema = z.object({
   scenes: z.array(z.object({
     sceneNumber: z.number(),
+    transition: z.enum(["cut", "fade_black", "cross_dissolve", "fade_white", "wipe_left"]).describe("Transition into this scene. Scene 1 is always 'cut'. Use fade_black for mood shifts, cross_dissolve for time passing, fade_white for dreamy/emotional moments, wipe_left sparingly for dramatic reveals."),
     shots: z.array(shotSchema),
   })),
 });
@@ -70,19 +71,28 @@ DIALOGUE PACING:
 
 ${cinematicRules}
 
+SCENE TRANSITIONS:
+- Scene 1 always uses "cut" (no transition before the first scene)
+- "fade_black" for dramatic mood shifts or time jumps
+- "cross_dissolve" for gentle time passing or location changes
+- "fade_white" for dreamy, emotional, or transcendent moments
+- "wipe_left" sparingly for dramatic reveals
+- Keep transitions SHORT (0.5-1 second) — they shouldn't distract
+
 Story Analysis:
 ${scenesJson}
 
 For each scene:
-1. Break into shots (each 4, 6, or 8 seconds)
-2. Assign cinematic composition types (use underscore format: wide_establishing, over_the_shoulder, etc.)
-3. Distribute dialogue across shots respecting pacing rules
-4. All shots use first_last_frame generation strategy
-5. Write detailed frame prompts that include the composition type
-6. Write action prompts for video generation
-7. Include dialogue as quoted speech if present
+1. Choose a transition type (cut, fade_black, cross_dissolve, fade_white, or wipe_left)
+2. Break into shots (each 4, 6, or 8 seconds)
+3. Assign cinematic composition types (use underscore format: wide_establishing, over_the_shoulder, etc.)
+4. Distribute dialogue across shots respecting pacing rules
+5. All shots use first_last_frame generation strategy
+6. Write detailed frame prompts that include the composition type
+7. Write action prompts for video generation
+8. Include dialogue as quoted speech if present
 
-Return a JSON object with scenes array, where each scene has a shots array with all required fields.`;
+Return a JSON object with scenes array, where each scene has a transition field and a shots array with all required fields.`;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -144,6 +154,7 @@ export const planShotsTool = {
         charactersPresent: z.array(z.string()),
         location: z.string(),
         estimatedDurationSeconds: z.number(),
+        transition: z.enum(["cut", "fade_black", "cross_dissolve", "fade_white", "wipe_left"]).optional().describe("Transition into this scene"),
         shots: z.array(z.any()), // shots are filled later
       })),
     }).describe("The story analysis result from analyzeStory"),

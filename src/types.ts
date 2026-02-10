@@ -35,6 +35,7 @@ export interface Scene {
   location: string;
   estimatedDurationSeconds: number;
   shots: Shot[];               // filled by Claude orchestrator
+  transition: "cut" | "fade_black" | "cross_dissolve" | "fade_white" | "wipe_left";  // transition INTO this scene (scene 1 is always "cut")
 }
 
 export interface StoryAnalysis {
