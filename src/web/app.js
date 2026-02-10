@@ -701,13 +701,34 @@ async function handleContinueClick() {
         body: "{}",
       },
     );
-    appendEvent(
-      createEventEntry({
-        title: "Continue requested",
-        message: `${response.decision.stage} (${response.decision.instructionCount})`,
-        timestamp: response.decision.decidedAt,
-      }),
-    );
+    const decision =
+      response &&
+      typeof response === "object" &&
+      response.decision &&
+      typeof response.decision === "object"
+        ? response.decision
+        : null;
+
+    if (decision && typeof decision.stage === "string") {
+      appendEvent(
+        createEventEntry({
+          title: "Continue requested",
+          message: `${decision.stage} (${decision.instructionCount ?? 0})`,
+          timestamp: typeof decision.decidedAt === "string" ? decision.decidedAt : undefined,
+        }),
+      );
+    } else {
+      const message =
+        response && typeof response.message === "string"
+          ? response.message
+          : "Continue request accepted";
+      appendEvent(
+        createEventEntry({
+          title: "Continue status",
+          message,
+        }),
+      );
+    }
     await refreshRun();
     setGlobalError("");
   } catch (error) {
