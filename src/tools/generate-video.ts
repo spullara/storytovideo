@@ -84,10 +84,10 @@ export async function generateVideo(params: {
         };
 
         // Build config
-        // Note: Interpolation requires durationSeconds: 8 for 1080p+ per API docs
-        // Note: referenceImages is NOT supported with first_last_frame mode (API constraint)
+        // Veo 3.1 supports 4, 6, or 8 second durations at 720p for interpolation.
+        // Duration must be 8 for extension mode, reference images, or 1080p/4k.
         const config: Record<string, unknown> = {
-          durationSeconds: 8,
+          durationSeconds: durationSeconds,
           aspectRatio: "16:9",
         };
 
