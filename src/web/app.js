@@ -111,6 +111,10 @@ function isRunReviewSafe(run) {
   return Boolean(run) && run.status === "awaiting_review" && Boolean(run.review?.awaitingUserReview);
 }
 
+function isStageGenerating(stage) {
+  return isRunActivelyExecuting(state.activeRun) && state.activeRun.currentStage === stage;
+}
+
 function setReviewLockMessage(message, tone = "locked") {
   elements.reviewLockMessage.textContent = message;
   elements.reviewLockMessage.classList.remove("lock-message-locked", "lock-message-ready");
@@ -462,13 +466,19 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
         const frontAsset = findAsset(`character:${char.name}:front`);
         const angleAsset = findAsset(`character:${char.name}:angle`);
         let imagesHtml = "";
-        if (frontAsset || angleAsset) {
+        const showCharacterSpinners = isStageGenerating("asset_generation");
+
+        if (frontAsset || angleAsset || showCharacterSpinners) {
           imagesHtml += `<div class="character-images">`;
           if (frontAsset && frontAsset.previewUrl) {
             imagesHtml += `<img src="${escapeHtml(frontAsset.previewUrl)}" alt="Front" class="inline-thumbnail" />`;
+          } else if (showCharacterSpinners) {
+            imagesHtml += `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
           }
           if (angleAsset && angleAsset.previewUrl) {
             imagesHtml += `<img src="${escapeHtml(angleAsset.previewUrl)}" alt="Angle" class="inline-thumbnail" />`;
+          } else if (showCharacterSpinners) {
+            imagesHtml += `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
           }
           imagesHtml += `</div>`;
         }
@@ -496,6 +506,8 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
         let locImageHtml = "";
         if (locAsset && locAsset.previewUrl) {
           locImageHtml = `<img src="${escapeHtml(locAsset.previewUrl)}" alt="Location" class="inline-thumbnail" />`;
+        } else if (isStageGenerating("asset_generation")) {
+          locImageHtml = `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
         }
         html += `<td>${locImageHtml}</td>`;
         html += `</tr>`;
@@ -532,8 +544,10 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
             const startFrameAsset = findAsset(`frame:${shot.shotNumber}:start`);
             const endFrameAsset = findAsset(`frame:${shot.shotNumber}:end`);
             const videoAsset = findAsset(`video:${shot.shotNumber}`);
+            const showFrameSpinners = isStageGenerating("frame_generation");
+            const showVideoSpinners = isStageGenerating("video_generation");
 
-            if (startFrameAsset || endFrameAsset || videoAsset) {
+            if (startFrameAsset || endFrameAsset || videoAsset || showFrameSpinners || showVideoSpinners) {
               html += `<tr><td colspan="4">`;
               html += `<div class="shot-assets">`;
               if (startFrameAsset && startFrameAsset.previewUrl) {
@@ -541,17 +555,32 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
                 html += `<p class="shot-asset-label">Start Frame</p>`;
                 html += `<img src="${escapeHtml(startFrameAsset.previewUrl)}" alt="Start Frame" class="inline-thumbnail" />`;
                 html += `</div>`;
+              } else if (showFrameSpinners) {
+                html += `<div class="shot-asset-item">`;
+                html += `<p class="shot-asset-label">Start Frame</p>`;
+                html += `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
+                html += `</div>`;
               }
               if (endFrameAsset && endFrameAsset.previewUrl) {
                 html += `<div class="shot-asset-item">`;
                 html += `<p class="shot-asset-label">End Frame</p>`;
                 html += `<img src="${escapeHtml(endFrameAsset.previewUrl)}" alt="End Frame" class="inline-thumbnail" />`;
                 html += `</div>`;
+              } else if (showFrameSpinners) {
+                html += `<div class="shot-asset-item">`;
+                html += `<p class="shot-asset-label">End Frame</p>`;
+                html += `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
+                html += `</div>`;
               }
               if (videoAsset && videoAsset.previewUrl) {
                 html += `<div class="shot-asset-item">`;
                 html += `<p class="shot-asset-label">Video</p>`;
                 html += `<video src="${escapeHtml(videoAsset.previewUrl)}" class="inline-video" controls preload="metadata"></video>`;
+                html += `</div>`;
+              } else if (showVideoSpinners) {
+                html += `<div class="shot-asset-item">`;
+                html += `<p class="shot-asset-label">Video</p>`;
+                html += `<div class="spinner-placeholder spinner-video"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
                 html += `</div>`;
               }
               html += `</div>`;
@@ -566,12 +595,18 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
       html += `</div>`;
     }
 
-    // Final video section (if assembly is complete)
+    // Final video section (if assembly is complete or in progress)
     const finalVideoAsset = findAsset("final.mp4");
+    const showFinalVideoSpinner = isStageGenerating("assembly");
     if (finalVideoAsset && finalVideoAsset.previewUrl) {
       html += `<div class="stage-output-section final-video-section">`;
       html += `<h4>Final Video</h4>`;
       html += `<video src="${escapeHtml(finalVideoAsset.previewUrl)}" class="final-video" controls preload="metadata"></video>`;
+      html += `</div>`;
+    } else if (showFinalVideoSpinner) {
+      html += `<div class="stage-output-section final-video-section">`;
+      html += `<h4>Final Video</h4>`;
+      html += `<div class="spinner-placeholder spinner-video"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
       html += `</div>`;
     }
 
