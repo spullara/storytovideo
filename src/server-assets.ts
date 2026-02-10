@@ -13,7 +13,7 @@ const MIME_TYPES: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
 };
 
-export type AssetFeedItemType = "asset" | "frame_start" | "frame_end" | "video";
+export type AssetFeedItemType = "asset" | "frame_start" | "frame_end" | "video" | "document";
 
 export interface AssetFeedItem {
   id: string;
@@ -130,6 +130,21 @@ export function createAssetFeedItem(params: AssetFeedItemInput): AssetFeedItem {
 export function buildAssetFeed(runId: string, state: PipelineState): AssetFeedItem[] {
   const fallbackTimestamp = state.lastSavedAt || new Date().toISOString();
   const items: AssetFeedItem[] = [];
+
+  // Add story_analysis.json as a document asset if it exists
+  if (state.storyAnalysis) {
+    items.push(
+      createAssetFeedItem({
+        runId,
+        outputDir: state.outputDir,
+        id: `${runId}-story-analysis`,
+        type: "document",
+        key: "story_analysis",
+        path: "story_analysis.json",
+        fallbackTimestamp,
+      }),
+    );
+  }
 
   for (const [assetKey, assetPath] of Object.entries(state.generatedAssets)) {
     items.push(
