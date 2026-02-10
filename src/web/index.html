@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StoryToVideo Run Console</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="layout">
+    <section class="panel panel-controls">
+      <header class="panel-header">
+        <p class="eyebrow">Wave 2</p>
+        <h1>Run Console</h1>
+        <p class="muted">Submit stories, review each stage, and continue with guidance.</p>
+      </header>
+
+      <section class="card">
+        <h2>Create Run</h2>
+        <form id="create-run-form">
+          <label for="story-text">Story text</label>
+          <textarea
+            id="story-text"
+            name="storyText"
+            rows="7"
+            placeholder="Paste a short story here..."
+            required
+          ></textarea>
+          <button id="create-run-button" type="submit">Start run</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Run Selection</h2>
+        <div class="inline-row">
+          <select id="run-select" aria-label="Select run"></select>
+          <button id="refresh-runs-button" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Run State</h2>
+        <dl class="run-meta">
+          <div><dt>Run ID</dt><dd id="run-id">-</dd></div>
+          <div><dt>Status</dt><dd id="run-status">idle</dd></div>
+          <div><dt>Stage</dt><dd id="run-stage">-</dd></div>
+          <div><dt>Progress</dt><dd id="run-progress">0 / 6 (0%)</dd></div>
+          <div><dt>Output</dt><dd id="run-output">-</dd></div>
+          <div><dt>SSE</dt><dd id="connection-status">disconnected</dd></div>
+        </dl>
+        <p id="run-error" class="error hidden"></p>
+      </section>
+
+      <section class="card">
+        <h2>Stage Progression</h2>
+        <ul id="stage-list" class="stage-list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Review Controls</h2>
+        <dl class="review-meta">
+          <div><dt>Awaiting review</dt><dd id="review-awaiting">no</dd></div>
+          <div><dt>Continue requested</dt><dd id="review-continue-state">no</dd></div>
+          <div><dt>Pending instructions</dt><dd id="review-pending-count">0</dd></div>
+        </dl>
+
+        <form id="instruction-form">
+          <label for="instruction-text">Instruction</label>
+          <textarea
+            id="instruction-text"
+            rows="4"
+            placeholder="Add guidance for the next stage..."
+          ></textarea>
+          <label for="instruction-stage">Target stage (optional)</label>
+          <select id="instruction-stage">
+            <option value="">Auto (next pending stage)</option>
+          </select>
+          <button id="submit-instruction-button" type="submit">Submit instruction</button>
+        </form>
+
+        <button id="continue-button" type="button">Continue to next step</button>
+      </section>
+    </section>
+
+    <section class="panel panel-feed">
+      <section class="card">
+        <h2>Event Feed</h2>
+        <ul id="events-list" class="feed-list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Asset Feed</h2>
+        <ul id="assets-list" class="asset-grid"></ul>
+      </section>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
