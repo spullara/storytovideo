@@ -1286,7 +1286,30 @@ async function resumeStaleRuns(): Promise<void> {
         continue;
       }
 
-      if (state.awaitingUserReview) {
+      if (state.awaitingUserReview && state.continueRequested) {
+        // User already clicked "Continue" before crash - resume the pipeline
+        state.continueRequested = false;
+        state.awaitingUserReview = false;
+        await saveState({ state });
+
+        runStore.patch(run.id, {
+          status: "queued",
+          currentStage: state.currentStage,
+          completedStages: state.completedStages,
+        });
+        startRunStateMonitor(run.id);
+        setImmediate(() => {
+          void runInBackground(run.id, true);
+        });
+        console.log(`[Recovery] Run ${run.id} auto-resuming after continue request`);
+        appendServerDiagnostic("run_recovery_resumed_after_continue", {
+          runId: run.id,
+          outputDir: run.outputDir,
+          currentStage: state.currentStage,
+          completedStages: state.completedStages,
+        });
+        recovered++;
+      } else if (state.awaitingUserReview) {
         // Run was awaiting review - restore to awaiting_review status
         runStore.patch(run.id, {
           status: "awaiting_review",
