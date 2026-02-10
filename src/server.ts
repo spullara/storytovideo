@@ -114,6 +114,26 @@ interface SubmitInstructionRequest {
 const RUN_DB_DIR = resolve(process.env.STORYTOVIDEO_RUN_DB_DIR ?? "./output/api-server");
 const RUN_DB_PATH = join(RUN_DB_DIR, "runs.json");
 const RUN_OUTPUT_ROOT = resolve(process.env.STORYTOVIDEO_RUN_OUTPUT_ROOT ?? "./output/runs");
+const WEB_ROOT = resolve(process.cwd(), "src", "web");
+
+const WEB_ASSET_BY_PATH: Record<string, { filePath: string; contentType: string }> = {
+  "/": {
+    filePath: join(WEB_ROOT, "index.html"),
+    contentType: "text/html; charset=utf-8",
+  },
+  "/index.html": {
+    filePath: join(WEB_ROOT, "index.html"),
+    contentType: "text/html; charset=utf-8",
+  },
+  "/app.js": {
+    filePath: join(WEB_ROOT, "app.js"),
+    contentType: "text/javascript; charset=utf-8",
+  },
+  "/styles.css": {
+    filePath: join(WEB_ROOT, "styles.css"),
+    contentType: "text/css; charset=utf-8",
+  },
+};
 
 class RunStore {
   private readonly runs = new Map<string, RunRecord>();
@@ -610,6 +630,22 @@ function detectMimeType(filePath: string): string {
   return detectMimeTypeFromPath(filePath);
 }
 
+function sendStaticFile(
+  res: ServerResponse,
+  filePath: string,
+  contentType: string,
+): boolean {
+  if (!existsSync(filePath)) {
+    return false;
+  }
+
+  res.statusCode = 200;
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Cache-Control", "no-store");
+  res.end(readFileSync(filePath));
+  return true;
+}
+
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -875,6 +911,20 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
     if (method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, { ok: true });
       return;
+    }
+
+    if (method === "GET") {
+      const webAsset = WEB_ASSET_BY_PATH[url.pathname];
+      if (webAsset) {
+        const served = sendStaticFile(
+          res,
+          webAsset.filePath,
+          webAsset.contentType,
+        );
+        if (served) {
+          return;
+        }
+      }
     }
 
     if (method === "POST" && url.pathname === "/runs") {
