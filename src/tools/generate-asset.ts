@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { getGoogleClient } from "../google-client";
+import { uploadAsset, runWorkflow, pollJob, downloadAsset } from "../comfy-client";
 import * as fs from "fs";
 import * as path from "path";
 
 /**
- * Generates reference images for characters and locations using Nano Banana (gemini-2.5-flash-image).
+ * Generates reference images for characters and locations using ComfyUI.
  * Returns file path for the generated image.
  */
 export async function generateAsset(params: {
@@ -57,18 +57,9 @@ export async function generateAsset(params: {
   let prompt: string;
   let isEditing = false;
 
-  // Prepare image input parts if reference image provided
-  const imageParts: any[] = [];
+  // Check if reference image provided
   if (referenceImagePath && fs.existsSync(referenceImagePath)) {
     isEditing = true;
-    const imageData = fs.readFileSync(referenceImagePath);
-    const base64Image = imageData.toString("base64");
-    imageParts.push({
-      inlineData: {
-        mimeType: "image/png",
-        data: base64Image,
-      },
-    });
 
     // Image editing prompt for consistency
     if (assetType === "character") {
@@ -93,54 +84,47 @@ export async function generateAsset(params: {
     console.log(`[generateAsset] Generating new ${assetType}: ${assetName}`);
   }
 
-  // Call Nano Banana API with retry logic
+  // Call ComfyUI API with retry logic
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const client = getGoogleClient();
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: prompt }, ...imageParts],
-          },
-        ],
-        config: {
-          responseModalities: isEditing ? ["Image", "Text"] : ["Image"],
-        } as any,
-      });
+      // Ensure output directory exists
+      const assetDir = path.join(outputDir, "assets", `${assetType}s`);
+      fs.mkdirSync(assetDir, { recursive: true });
 
-      // Extract image from response
-      if (
-        response.candidates &&
-        response.candidates[0] &&
-        response.candidates[0].content &&
-        response.candidates[0].content.parts
-      ) {
-        const imagePart = response.candidates[0].content.parts.find(
-          (part: any) => part.inlineData
-        );
-        if (imagePart && imagePart.inlineData && imagePart.inlineData.data) {
-          const imageData = imagePart.inlineData.data;
-          const imageBuffer = typeof imageData === "string"
-            ? Buffer.from(imageData, "base64")
-            : Buffer.from(imageData);
+      // Save image
+      const filename = `${assetName.toLowerCase()}_${angleType}.png`;
+      const filePath = path.join(assetDir, filename);
 
-          // Ensure output directory exists
-          const assetDir = path.join(outputDir, "assets", `${assetType}s`);
-          fs.mkdirSync(assetDir, { recursive: true });
+      let jobId: string;
 
-          // Save image
-          const filename = `${assetName.toLowerCase()}_${angleType}.png`;
-          const filePath = path.join(assetDir, filename);
-          fs.writeFileSync(filePath, imageBuffer);
-
-          return { key, path: filePath };
-        }
+      if (isEditing) {
+        // Image edit workflow
+        const assetId = await uploadAsset(referenceImagePath!);
+        jobId = await runWorkflow("image_edit", {
+          prompt,
+          input_asset_ids: [assetId],
+        });
+      } else {
+        // Text to image workflow
+        jobId = await runWorkflow("text_to_image", {
+          prompt,
+          width: 1328,
+          height: 1328,
+        });
       }
 
-      throw new Error("No image data in response");
+      // Poll for job completion
+      const result = await pollJob(jobId);
+
+      // Download the output asset
+      if (result.outputAssetIds.length > 0) {
+        const outputAssetId = result.outputAssetIds[0];
+        await downloadAsset(outputAssetId, filePath);
+        return { key, path: filePath };
+      }
+
+      throw new Error("No output asset IDs in job result");
     } catch (error) {
       lastError = error as Error;
       if (attempt < 3) {
@@ -163,7 +147,7 @@ export async function generateAsset(params: {
  */
 export const generateAssetTool = {
   description:
-    "Generate reference images for characters and locations using Nano Banana (gemini-2.5-flash-image). When referenceImagePath is provided, edits the reference image to create variations (e.g., different angles) while maintaining exact consistency in appearance, clothing, features, and color palette.",
+    "Generate reference images for characters and locations using ComfyUI. When referenceImagePath is provided, edits the reference image to create variations (e.g., different angles) while maintaining exact consistency in appearance, clothing, features, and color palette.",
   parameters: z.object({
     characterName: z.string().optional(),
     locationName: z.string().optional(),
