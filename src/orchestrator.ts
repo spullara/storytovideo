@@ -89,6 +89,65 @@ function buildInstructionInjectionBlock(instructions: string[]): string {
   return `\n\nAdditional user instructions for this stage:\n${numbered}\nApply these instructions when executing this stage unless they conflict with tool schemas or safety constraints.`;
 }
 
+/**
+ * Clear item-level data for a given stage and all subsequent stages.
+ * This is used by the --redo option to reset state before re-running a stage.
+ *
+ * Data clearing rules by stage:
+ * - analysis (0): clear storyAnalysis, assetLibrary, generatedAssets, generatedFrames, generatedVideos
+ * - shot_planning (1): clear assetLibrary, generatedAssets, generatedFrames, generatedVideos
+ * - asset_generation (2): clear generatedAssets, generatedFrames, generatedVideos
+ * - frame_generation (3): clear generatedFrames, generatedVideos
+ * - video_generation (4): clear generatedVideos
+ * - assembly (5): nothing to clear
+ */
+export function clearStageData(state: PipelineState, fromStage: StageName): void {
+  const stageIdx = STAGE_ORDER.indexOf(fromStage);
+  if (stageIdx < 0) {
+    throw new Error(`Unknown stage: ${fromStage}`);
+  }
+
+  // Clear data based on stage index
+  if (stageIdx <= 0) {
+    // analysis: clear everything
+    state.storyAnalysis = null;
+    state.assetLibrary = null;
+    state.generatedAssets = {};
+    state.generatedFrames = {};
+    state.generatedVideos = {};
+  } else if (stageIdx <= 1) {
+    // shot_planning: clear asset-related and downstream
+    state.assetLibrary = null;
+    state.generatedAssets = {};
+    state.generatedFrames = {};
+    state.generatedVideos = {};
+  } else if (stageIdx <= 2) {
+    // asset_generation: clear generated assets and downstream
+    state.generatedAssets = {};
+    state.generatedFrames = {};
+    state.generatedVideos = {};
+  } else if (stageIdx <= 3) {
+    // frame_generation: clear generated frames and videos
+    state.generatedFrames = {};
+    state.generatedVideos = {};
+  } else if (stageIdx <= 4) {
+    // video_generation: clear generated videos
+    state.generatedVideos = {};
+  }
+  // assembly (5): nothing to clear
+
+  // Remove the target stage and all subsequent stages from completedStages
+  for (let i = stageIdx; i < STAGE_ORDER.length; i++) {
+    const idx = state.completedStages.indexOf(STAGE_ORDER[i]);
+    if (idx !== -1) {
+      state.completedStages.splice(idx, 1);
+    }
+  }
+
+  // Set currentStage to the target stage
+  state.currentStage = fromStage;
+}
+
 // ---------------------------------------------------------------------------
 // Stage runner — each stage is a separate generateText() call
 // ---------------------------------------------------------------------------
@@ -704,6 +763,26 @@ export async function runPipeline(
     console.log(`Skipping to stage: ${options.skipTo}`);
   }
 
+  // Handle --redo: clear data from target stage onward and re-run
+  if (options.redo) {
+    const redoIdx = STAGE_ORDER.indexOf(options.redo as StageName);
+    if (redoIdx < 0) {
+      throw new Error(`Unknown stage: ${options.redo}. Valid stages: ${STAGE_ORDER.join(", ")}`);
+    }
+    // Load existing state
+    const loaded = loadState(options.outputDir);
+    if (loaded) {
+      state = loaded;
+      state.interrupted = false;
+    }
+    // Clear data from the target stage onward
+    clearStageData(state, options.redo as StageName);
+    // Save the cleared state immediately
+    await saveState({ state });
+    console.log(`Redoing stage: ${options.redo}`);
+    console.log(`Cleared data from ${options.redo} onward`);
+  }
+
   if (options.reviewMode && state.awaitingUserReview) {
     if (!state.continueRequested) {
       console.log("\nAwaiting user review before continuing.");
@@ -829,3 +908,7 @@ export async function runPipeline(
     console.log(`Total shots: ${allShots.length}`);
   }
 }
+
+// Export types and constants for use by other modules (e.g., server, CLI)
+export type { StageName };
+export { STAGE_ORDER };

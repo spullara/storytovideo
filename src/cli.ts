@@ -46,6 +46,7 @@ program
   .option("--verify", "Enable AI verification with automatic retries", false)
   .option("--max-retries <number>", "Maximum retries for failed generations", "2")
   .option("--skip-to <stage>", "Skip to a specific pipeline stage")
+  .option("--redo <stage>", "Redo a specific pipeline stage (clears data from that stage onward)")
   .option("--resume", "Resume from saved state", false)
   .option("--verbose", "Show detailed logs and Claude reasoning", false)
   .action(async (storyFile, options) => {
@@ -72,6 +73,7 @@ program
         verify: options.verify,
         maxRetries,
         skipTo: options.skipTo,
+        redo: options.redo,
         resume: options.resume,
         verbose: options.verbose,
       };

@@ -64,6 +64,7 @@ export interface PipelineOptions {
   verify: boolean;
   maxRetries: number;
   skipTo?: string;
+  redo?: string;
   resume: boolean;
   verbose: boolean;
   reviewMode?: boolean;
