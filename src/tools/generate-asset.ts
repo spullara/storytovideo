@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { uploadAsset, runWorkflow, pollJob, downloadAsset } from "../comfy-client";
+import { uploadAsset, runWorkflow, pollJob, downloadAsset, checkJob } from "../comfy-client";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -15,6 +15,11 @@ export async function generateAsset(params: {
   outputDir: string;
   dryRun?: boolean;
   referenceImagePath?: string;
+  pendingJobStore?: {
+    get: (key: string) => { jobId: string; outputPath: string } | undefined;
+    set: (key: string, value: { jobId: string; outputPath: string }) => Promise<void>;
+    delete: (key: string) => Promise<void>;
+  };
 }): Promise<{ key: string; path: string }> {
   const {
     characterName,
@@ -24,6 +29,7 @@ export async function generateAsset(params: {
     outputDir,
     dryRun = false,
     referenceImagePath,
+    pendingJobStore,
   } = params;
 
   // Determine asset type and key
@@ -46,6 +52,25 @@ export async function generateAsset(params: {
   }
 
   const key = `${assetType}:${assetName}:${angleType}`;
+
+  // Check for a pending job from a previous run
+  const pendingKey = `asset:${key}`;
+  if (pendingJobStore) {
+    const pending = pendingJobStore.get(pendingKey);
+    if (pending) {
+      console.log(`[generateAsset] Found pending job ${pending.jobId} for ${key}, checking status...`);
+      const check = await checkJob(pending.jobId);
+      if (check?.status === 'completed' && check.outputAssetIds.length > 0) {
+        console.log(`[generateAsset] Pending job completed! Downloading result...`);
+        await downloadAsset(check.outputAssetIds[0], pending.outputPath);
+        await pendingJobStore.delete(pendingKey);
+        console.log(`[generateAsset] Asset ${key} recovered from pending job`);
+        return { key, path: pending.outputPath };
+      }
+      console.log(`[generateAsset] Pending job status: ${check?.status ?? 'unknown'}, starting fresh`);
+      await pendingJobStore.delete(pendingKey);
+    }
+  }
 
   // Dry-run mode: return placeholder path
   if (dryRun) {
@@ -114,6 +139,11 @@ export async function generateAsset(params: {
         });
       }
 
+      // Persist job ID so it can be recovered after restart
+      if (pendingJobStore) {
+        await pendingJobStore.set(pendingKey, { jobId, outputPath: filePath });
+      }
+
       // Poll for job completion
       const result = await pollJob(jobId);
 
@@ -121,6 +151,10 @@ export async function generateAsset(params: {
       if (result.outputAssetIds.length > 0) {
         const outputAssetId = result.outputAssetIds[0];
         await downloadAsset(outputAssetId, filePath);
+        // Clean up pending job entry
+        if (pendingJobStore) {
+          await pendingJobStore.delete(pendingKey);
+        }
         return { key, path: filePath };
       }
 

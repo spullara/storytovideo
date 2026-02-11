@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { uploadAsset, runWorkflow, pollJob, downloadAsset } from "../comfy-client";
+import { uploadAsset, runWorkflow, pollJob, downloadAsset, checkJob } from "../comfy-client";
 import type { Shot, AssetLibrary } from "../types";
 import * as fs from "fs";
 import * as path from "path";
@@ -16,8 +16,13 @@ export async function generateFrame(params: {
   outputDir: string;
   dryRun?: boolean;
   previousEndFramePath?: string;
+  pendingJobStore?: {
+    get: (key: string) => { jobId: string; outputPath: string } | undefined;
+    set: (key: string, value: { jobId: string; outputPath: string }) => Promise<void>;
+    delete: (key: string) => Promise<void>;
+  };
 }): Promise<{ shotNumber: number; startPath?: string; endPath?: string }> {
-  const { shot, artStyle, assetLibrary, outputDir, dryRun = false, previousEndFramePath } = params;
+  const { shot, artStyle, assetLibrary, outputDir, dryRun = false, previousEndFramePath, pendingJobStore } = params;
 
   // Create frames directory if it doesn't exist
   const framesDir = path.join(outputDir, "frames");
@@ -47,6 +52,7 @@ export async function generateFrame(params: {
       previousStartFramePath: undefined,
       previousEndFramePath,
       outputPath: startPath,
+      pendingJobStore,
     });
 
     // Generate end frame (with start frame as additional input for continuity)
@@ -57,6 +63,7 @@ export async function generateFrame(params: {
       isEndFrame: true,
       previousStartFramePath: startFramePath,
       outputPath: endPath,
+      pendingJobStore,
     });
 
     return {
@@ -82,6 +89,11 @@ async function generateSingleFrame(params: {
   previousStartFramePath?: string;
   previousEndFramePath?: string;
   outputPath: string;
+  pendingJobStore?: {
+    get: (key: string) => { jobId: string; outputPath: string } | undefined;
+    set: (key: string, value: { jobId: string; outputPath: string }) => Promise<void>;
+    delete: (key: string) => Promise<void>;
+  };
 }): Promise<string> {
   const {
     shot,
@@ -91,7 +103,28 @@ async function generateSingleFrame(params: {
     previousStartFramePath,
     previousEndFramePath,
     outputPath,
+    pendingJobStore,
   } = params;
+
+  // Check for a pending job from a previous run
+  const frameType = isEndFrame ? "end" : "start";
+  const pendingKey = `frame:${shot.shotNumber}:${frameType}`;
+  if (pendingJobStore) {
+    const pending = pendingJobStore.get(pendingKey);
+    if (pending) {
+      console.log(`[generateFrame] Found pending job ${pending.jobId} for shot ${shot.shotNumber} ${frameType}, checking status...`);
+      const check = await checkJob(pending.jobId);
+      if (check?.status === 'completed' && check.outputAssetIds.length > 0) {
+        console.log(`[generateFrame] Pending job completed! Downloading result...`);
+        await downloadAsset(check.outputAssetIds[0], pending.outputPath);
+        await pendingJobStore.delete(pendingKey);
+        console.log(`[generateFrame] Frame ${shot.shotNumber} ${frameType} recovered from pending job`);
+        return pending.outputPath;
+      }
+      console.log(`[generateFrame] Pending job status: ${check?.status ?? 'unknown'}, starting fresh`);
+      await pendingJobStore.delete(pendingKey);
+    }
+  }
 
   // Build the prompt
   const framePrompt = isEndFrame ? shot.endFramePrompt : shot.startFramePrompt;
@@ -166,6 +199,11 @@ async function generateSingleFrame(params: {
     });
   }
 
+  // Persist job ID so it can be recovered after restart
+  if (pendingJobStore) {
+    await pendingJobStore.set(pendingKey, { jobId, outputPath });
+  }
+
   // Poll job until completion
   const jobResult = await pollJob(jobId);
 
@@ -176,6 +214,11 @@ async function generateSingleFrame(params: {
   // Download the first output asset
   const outputAssetId = jobResult.outputAssetIds[0];
   await downloadAsset(outputAssetId, outputPath);
+
+  // Clean up pending job entry
+  if (pendingJobStore) {
+    await pendingJobStore.delete(pendingKey);
+  }
 
   return outputPath;
 }

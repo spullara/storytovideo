@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { mkdir } from "fs/promises";
 import { join } from "path";
-import { uploadAsset, runWorkflow, pollJob, downloadAsset } from "../comfy-client";
+import { uploadAsset, runWorkflow, pollJob, downloadAsset, checkJob } from "../comfy-client";
 
 /**
  * Generates video clips for shots using ComfyUI frame_to_video workflow.
@@ -19,6 +19,11 @@ export async function generateVideo(params: {
   endFramePath: string;
   outputDir: string;
   dryRun?: boolean;
+  pendingJobStore?: {
+    get: (key: string) => { jobId: string; outputPath: string } | undefined;
+    set: (key: string, value: { jobId: string; outputPath: string }) => Promise<void>;
+    delete: (key: string) => Promise<void>;
+  };
 }): Promise<{ shotNumber: number; path: string; duration: number }> {
   const {
     shotNumber,
@@ -32,12 +37,32 @@ export async function generateVideo(params: {
     endFramePath,
     outputDir,
     dryRun = false,
+    pendingJobStore,
   } = params;
 
   // Ensure output directory exists
   await mkdir(outputDir, { recursive: true });
 
   const outputPath = join(outputDir, `shot_${String(shotNumber).padStart(3, "0")}.mp4`);
+
+  // Check for a pending job from a previous run
+  const pendingKey = `video:${shotNumber}`;
+  if (pendingJobStore) {
+    const pending = pendingJobStore.get(pendingKey);
+    if (pending) {
+      console.log(`[generateVideo] Found pending job ${pending.jobId} for shot ${shotNumber}, checking status...`);
+      const check = await checkJob(pending.jobId);
+      if (check?.status === 'completed' && check.outputAssetIds.length > 0) {
+        console.log(`[generateVideo] Pending job completed! Downloading result...`);
+        await downloadAsset(check.outputAssetIds[0], pending.outputPath);
+        await pendingJobStore.delete(pendingKey);
+        console.log(`[generateVideo] Shot ${shotNumber} recovered from pending job`);
+        return { shotNumber, path: pending.outputPath, duration: durationSeconds };
+      }
+      console.log(`[generateVideo] Pending job status: ${check?.status ?? 'unknown'}, starting fresh`);
+      await pendingJobStore.delete(pendingKey);
+    }
+  }
 
   // Dry-run mode: return placeholder
   if (dryRun) {
@@ -93,6 +118,11 @@ export async function generateVideo(params: {
         });
         console.log(`[generateVideo] Workflow started: job ${jobId}`);
 
+        // Persist job ID so it can be recovered after restart
+        if (pendingJobStore) {
+          await pendingJobStore.set(pendingKey, { jobId, outputPath });
+        }
+
         // Poll for job completion
         console.log(`[generateVideo] Polling for completion (job: ${jobId})`);
         const result = await pollJob(jobId);
@@ -108,6 +138,11 @@ export async function generateVideo(params: {
         // Download the output video
         console.log(`[generateVideo] Downloading video for shot ${shotNumber}`);
         await downloadAsset(result.outputAssetIds[0], outputPath);
+
+        // Clean up pending job entry
+        if (pendingJobStore) {
+          await pendingJobStore.delete(pendingKey);
+        }
 
         console.log(`[generateVideo] Shot ${shotNumber} saved to ${outputPath}`);
         return { shotNumber, path: outputPath, duration: durationSeconds };

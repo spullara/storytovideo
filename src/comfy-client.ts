@@ -69,6 +69,24 @@ export async function runWorkflow(
 }
 
 /**
+ * Single-poll check of a job's status (no loop, no retry).
+ * Used to check if a pending job from a previous run has completed.
+ * @param jobId - Job ID to check
+ * @returns Job status and output asset IDs, or null if unreachable/not found
+ */
+export async function checkJob(jobId: string): Promise<{ status: string; outputAssetIds: string[] } | null> {
+  const baseUrl = getComfyBaseUrl();
+  try {
+    const response = await fetch(`${baseUrl}/jobs/${jobId}`);
+    if (!response.ok) return null;
+    const data = await response.json() as { status: string; output_asset_ids?: string[] };
+    return { status: data.status, outputAssetIds: data.output_asset_ids || [] };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Poll a job until completion or failure
  * @param jobId - Job ID to poll
  * @returns Job status and output asset IDs

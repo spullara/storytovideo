@@ -284,6 +284,7 @@ function createInitialApiState(outputDir: string): PipelineState {
     pendingStageInstructions: {},
     instructionHistory: [],
     decisionHistory: [],
+    pendingJobs: {},
     lastSavedAt: new Date().toISOString(),
   };
 }

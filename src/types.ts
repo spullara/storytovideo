@@ -101,5 +101,6 @@ export interface PipelineState {
   pendingStageInstructions: Record<string, string[]>;
   instructionHistory: StageInstructionRecord[];
   decisionHistory: StageDecisionRecord[];
+  pendingJobs: Record<string, { jobId: string; outputPath: string }>;
   lastSavedAt: string;                             // ISO timestamp of last state save
 }
