@@ -307,6 +307,7 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
         if (params.locationName) {
           state.assetLibrary.locationImages[params.locationName] = result.path;
         }
+        await saveState({ state });
         return result;
       },
     },
@@ -417,6 +418,7 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
           start: result.startPath,
           end: result.endPath,
         };
+        await saveState({ state });
         return result;
       },
     },
@@ -515,6 +517,7 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
           outputDir: join(options.outputDir, "videos"),
         });
         state.generatedVideos[result.shotNumber] = result.path;
+        await saveState({ state });
         return result;
       },
     },
