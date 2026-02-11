@@ -397,10 +397,20 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
 
   await runStage("asset_generation", state, options, systemPrompt, userPrompt, assetTools, 60, options.verbose);
 
-  // Check if any assets were actually generated
-  const assetCount = Object.keys(state.generatedAssets).length;
-  if (assetCount === 0 && neededAssets.length > 0) {
-    console.warn(`[asset_generation] WARNING: Stage completed but generated 0/${neededAssets.length} assets. NOT marking as complete.`);
+  // Recompute remaining assets after stage execution (same logic as neededAssets above)
+  const remainingAssets: string[] = [];
+  for (const char of analysis.characters) {
+    const frontKey = `character:${char.name}:front`;
+    const angleKey = `character:${char.name}:angle`;
+    if (!state.generatedAssets[frontKey]) remainingAssets.push(frontKey);
+    if (!state.generatedAssets[angleKey]) remainingAssets.push(angleKey);
+  }
+  for (const loc of analysis.locations) {
+    const locKey = `location:${loc.name}:front`;
+    if (!state.generatedAssets[locKey]) remainingAssets.push(locKey);
+  }
+  if (remainingAssets.length > 0) {
+    console.warn(`[asset_generation] WARNING: ${remainingAssets.length} assets still missing. NOT marking as complete — will resume on next run.`);
     state.currentStage = "frame_generation";
     return state;
   }
@@ -513,10 +523,13 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
 
   await runStage("frame_generation", state, options, systemPrompt, userPrompt, frameTools, 60, options.verbose);
 
-  // Check if any frames were actually generated
-  const frameCount = Object.keys(state.generatedFrames).length;
-  if (frameCount === 0 && neededFrames.length > 0) {
-    console.warn(`[frame_generation] WARNING: Stage completed but generated 0/${neededFrames.length} frames. NOT marking as complete.`);
+  // Recompute remaining frames after stage execution
+  const remainingFrames = allShots.filter((s) => {
+    const existing = state.generatedFrames[s.shotNumber];
+    return !existing || !existing.start || !existing.end;
+  });
+  if (remainingFrames.length > 0) {
+    console.warn(`[frame_generation] WARNING: ${remainingFrames.length}/${allShots.length} frames still missing. NOT marking as complete — will resume on next run.`);
     state.currentStage = "video_generation";
     return state;
   }
@@ -617,12 +630,10 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
 
   await runStage("video_generation", state, options, systemPrompt, userPrompt, videoTools, 80, options.verbose);
 
-  // Check if any videos were actually generated
-  const videoCount = Object.keys(state.generatedVideos).length;
-  const shotCount = state.storyAnalysis?.scenes?.reduce((sum, s) => sum + (s.shots?.length || 0), 0) || 0;
-  if (videoCount === 0 && shotCount > 0) {
-    console.warn(`[video_generation] WARNING: Stage completed but generated 0/${shotCount} videos. NOT marking as complete.`);
-    // Still advance to assembly so pipeline can report status, but don't mark as completed
+  // Recompute remaining videos after stage execution
+  const remainingVideos = allShots.filter((s) => !state.generatedVideos[s.shotNumber]);
+  if (remainingVideos.length > 0) {
+    console.warn(`[video_generation] WARNING: ${remainingVideos.length}/${allShots.length} videos still missing. NOT marking as complete — will resume on next run.`);
     state.currentStage = "assembly";
     return state;
   }
