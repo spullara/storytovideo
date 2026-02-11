@@ -879,6 +879,7 @@ export async function runPipeline(
     }
 
     state.currentStage = stageName;
+    await saveState({ state });
 
     // Re-run stage until it completes (handles partial completions from AI agent hitting maxSteps)
     while (!state.completedStages.includes(stageName)) {
