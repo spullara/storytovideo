@@ -1207,9 +1207,9 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
         return;
       }
 
-      // Parse Range header (format: bytes=START-END)
-      const rangeMatch = rangeHeader.match(/bytes=(\d+)?-(\d+)?/);
-      if (!rangeMatch) {
+      // Parse Range header (format: bytes=START-END or bytes=-SUFFIX)
+      const rangeMatch = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+      if (!rangeMatch || (rangeMatch[1] === "" && rangeMatch[2] === "")) {
         // Invalid range format
         res.statusCode = 416;
         res.setHeader("Content-Range", `bytes */${fileSize}`);
@@ -1220,15 +1220,30 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
       const startStr = rangeMatch[1];
       const endStr = rangeMatch[2];
 
-      let start = startStr ? parseInt(startStr, 10) : 0;
-      let end = endStr ? parseInt(endStr, 10) : fileSize - 1;
+      let start: number;
+      let end: number;
+
+      // Handle suffix range (bytes=-N means last N bytes)
+      if (startStr === "" && endStr !== "") {
+        const suffixLength = parseInt(endStr, 10);
+        start = Math.max(0, fileSize - suffixLength);
+        end = fileSize - 1;
+      } else {
+        start = startStr ? parseInt(startStr, 10) : 0;
+        end = endStr ? parseInt(endStr, 10) : fileSize - 1;
+      }
 
       // Validate range
-      if (start > end || start >= fileSize || end >= fileSize) {
+      if (start >= fileSize || start > end) {
         res.statusCode = 416;
         res.setHeader("Content-Range", `bytes */${fileSize}`);
         res.end();
         return;
+      }
+
+      // Clamp end to fileSize - 1 (RFC 7233 compliance)
+      if (end >= fileSize) {
+        end = fileSize - 1;
       }
 
       // Return 206 Partial Content
