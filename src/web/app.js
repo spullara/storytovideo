@@ -11,6 +11,9 @@ const MAX_EVENTS = 300;
 const POLL_INTERVAL_MS = 2_500;
 const REFRESH_DEBOUNCE_MS = 220;
 
+// Cache the last rendered HTML to avoid DOM rebuilds when content hasn't changed
+let lastStageOutputHtml = null;
+
 const state = {
   runs: [],
   activeRunId: null,
@@ -610,7 +613,11 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
       html += `</div>`;
     }
 
-    elements.stageOutput.innerHTML = html;
+    // Only update innerHTML if the HTML has changed
+    if (html !== lastStageOutputHtml) {
+      elements.stageOutput.innerHTML = html;
+      lastStageOutputHtml = html;
+    }
     elements.stageOutputSection.style.display = "";
   } catch (error) {
     if (!silent) {
@@ -834,6 +841,7 @@ async function setActiveRun(runId) {
   if (changed) {
     state.assetsById = new Map();
     state.events = [];
+    lastStageOutputHtml = null; // Clear cached HTML when switching runs
     renderStoryDocument();
     renderEvents();
   }
