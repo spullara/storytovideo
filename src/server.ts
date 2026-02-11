@@ -11,7 +11,7 @@ import {
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { join, resolve } from "path";
 
-import { runPipeline } from "./orchestrator";
+import { runPipeline, clearStageData, STAGE_ORDER } from "./orchestrator";
 import {
   buildAssetFeed as buildAssetFeedFromState,
   createAssetFeedItem as createAssetFeedItemFromState,
@@ -28,14 +28,7 @@ import {
 import { loadState, saveState } from "./tools/state";
 import type { PipelineOptions, PipelineState } from "./types";
 
-const STAGE_ORDER = [
-  "analysis",
-  "shot_planning",
-  "asset_generation",
-  "frame_generation",
-  "video_generation",
-  "assembly",
-] as const;
+
 
 const STATE_POLL_INTERVAL_MS = 750;
 
@@ -993,6 +986,76 @@ async function handleRetryRun(
   sendJson(res, 200, { run: toRunResponse(updatedRecord) });
 }
 
+async function handleRedoRun(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  runId: string,
+  url: URL,
+): Promise<void> {
+  const run = runStore.get(runId);
+  if (!run) {
+    sendJson(res, 404, { error: `Run not found: ${runId}` });
+    return;
+  }
+
+  // Allow redo for completed, failed, and awaiting_review runs
+  if (!["completed", "failed", "awaiting_review"].includes(run.status)) {
+    sendJson(res, 409, { error: `Cannot redo run with status: ${run.status}` });
+    return;
+  }
+
+  // Block if run is actively executing
+  if (isRunActivelyExecuting(run.status)) {
+    sendRunMutationLockedResponse(res, run);
+    return;
+  }
+
+  // Parse and validate stage query parameter
+  const stage = url.searchParams.get("stage");
+  if (!stage) {
+    sendJson(res, 400, { error: "Missing required query parameter: stage" });
+    return;
+  }
+
+  // Validate stage name
+  if (!STAGE_ORDER.includes(stage as any)) {
+    sendJson(res, 400, { error: `Invalid stage: ${stage}. Valid stages: ${STAGE_ORDER.join(", ")}` });
+    return;
+  }
+
+  // Load state
+  const state = loadState(run.outputDir);
+  if (!state) {
+    sendJson(res, 409, { error: "No saved state available for redo" });
+    return;
+  }
+
+  // Clear data from the target stage onward
+  clearStageData(state, stage as any);
+
+  // Save the cleared state
+  await saveState({ state });
+
+  // Update run record
+  const updatedRecord = runStore.patch(runId, {
+    status: "queued",
+    completedAt: undefined,
+    error: undefined,
+    currentStage: stage,
+    completedStages: state.completedStages,
+  }) ?? run;
+
+  // Emit events
+  emitRunStatusEvent(runId, "queued");
+  emitLogEvent(runId, `Redoing from stage: ${stage}`);
+  startRunStateMonitor(runId);
+  setImmediate(() => {
+    void runInBackground(runId, true);
+  });
+
+  sendJson(res, 200, { run: toRunResponse(updatedRecord) });
+}
+
 async function handleContinueRun(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1132,6 +1195,12 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
     if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "retry") {
       const runId = decodeURIComponent(pathParts[1]);
       await handleRetryRun(req, res, runId);
+      return;
+    }
+
+    if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "redo") {
+      const runId = decodeURIComponent(pathParts[1]);
+      await handleRedoRun(req, res, runId, url);
       return;
     }
 

@@ -206,16 +206,35 @@ function renderStageProgress() {
 
   for (const stage of STAGE_ORDER) {
     const item = document.createElement("li");
-    item.textContent = formatStageLabel(stage);
+    const stageLabel = formatStageLabel(stage);
+    item.textContent = stageLabel;
 
     if (!run) {
       item.classList.add("stage-pending");
     } else if (run.completedStages.includes(stage)) {
       item.classList.add("stage-complete");
       item.textContent += " - complete";
+
+      // Add redo button for completed stages
+      const redoBtn = document.createElement("button");
+      redoBtn.className = "redo-button";
+      redoBtn.textContent = "Redo";
+      redoBtn.disabled = isRunActivelyExecuting(run);
+      redoBtn.onclick = () => handleRedoClick(stage);
+      item.append(" ", redoBtn);
     } else if (run.currentStage === stage) {
       item.classList.add("stage-current");
       item.textContent += " - current";
+
+      // Allow redo for current stage if run is failed or awaiting_review
+      if (["failed", "awaiting_review"].includes(run.status)) {
+        const redoBtn = document.createElement("button");
+        redoBtn.className = "redo-button";
+        redoBtn.textContent = "Redo";
+        redoBtn.disabled = isRunActivelyExecuting(run);
+        redoBtn.onclick = () => handleRedoClick(stage);
+        item.append(" ", redoBtn);
+      }
     } else {
       item.classList.add("stage-pending");
       item.textContent += " - pending";
@@ -1040,6 +1059,35 @@ async function handleRetryClick() {
     setGlobalError("");
   } catch (error) {
     setGlobalError(`Failed to retry run: ${error.message}`);
+  } finally {
+    renderRunDetails();
+  }
+}
+
+async function handleRedoClick(stage) {
+  if (!state.activeRunId) {
+    setGlobalError("No active run selected.");
+    return;
+  }
+  if (!state.activeRun) {
+    setGlobalError("No active run data available.");
+    return;
+  }
+
+  try {
+    await requestJson(`/runs/${encodeURIComponent(state.activeRunId)}/redo?stage=${stage}`, {
+      method: "POST",
+      body: "{}",
+    });
+    appendEvent(
+      createEventEntry({
+        title: "Redo stage",
+        message: `Redoing from stage: ${formatStageLabel(stage)}`,
+      }),
+    );
+    setGlobalError("");
+  } catch (error) {
+    setGlobalError(`Failed to redo stage: ${error.message}`);
   } finally {
     renderRunDetails();
   }
