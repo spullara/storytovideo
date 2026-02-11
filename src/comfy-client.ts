@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { interrupted } from "./signals";
 
 /**
  * Get the ComfyUI API base URL from environment variable or default
@@ -79,6 +80,11 @@ export async function pollJob(
   const pollIntervalMs = 5000;
 
   while (true) {
+    if (interrupted) {
+      await cancelJob(jobId);
+      throw new Error(`Job ${jobId} cancelled due to pipeline interruption`);
+    }
+
     const response = await fetch(`${baseUrl}/jobs/${jobId}`, {
       method: "GET",
     });
@@ -107,6 +113,24 @@ export async function pollJob(
 
     // Wait before polling again
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
+/**
+ * Cancel a running ComfyUI job (best-effort)
+ * @param jobId - Job ID to cancel
+ */
+export async function cancelJob(jobId: string): Promise<void> {
+  const baseUrl = getComfyBaseUrl();
+  try {
+    const response = await fetch(`${baseUrl}/jobs/${jobId}/cancel`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      console.warn(`[cancelJob] Failed to cancel job ${jobId}: ${response.status}`);
+    }
+  } catch (err) {
+    console.warn(`[cancelJob] Failed to cancel job ${jobId}:`, err);
   }
 }
 
