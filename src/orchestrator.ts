@@ -193,6 +193,16 @@ async function runStage(
     },
   } as any);
 
+  // Always log why the agent stopped
+  const stepCount = result.steps?.length ?? 0;
+  const finishReason = result.finishReason ?? "unknown";
+  console.log(`[${stageName}] Agent finished: reason=${finishReason}, steps=${stepCount}/${maxSteps}`);
+  if (result.usage) {
+    const input = result.usage.inputTokens ?? 0;
+    const output = result.usage.outputTokens ?? 0;
+    console.log(`[${stageName}] Token usage: input=${input}, output=${output}, total=${input + output}`);
+  }
+
   log(verbose, `[${stageName}] Final text:`, result.text?.substring(0, 300) || "(no text)");
 
   return state;
