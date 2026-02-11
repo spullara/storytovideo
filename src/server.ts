@@ -1090,6 +1090,48 @@ async function handleRedoRun(
   sendJson(res, 200, { run: toRunResponse(updatedRecord) });
 }
 
+async function handleStopRun(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  runId: string,
+): Promise<void> {
+  const run = runStore.get(runId);
+  if (!run) {
+    sendJson(res, 404, { error: `Run not found: ${runId}` });
+    return;
+  }
+
+  console.log('[handleStopRun] Stop requested for run ' + runId);
+
+  const existingPipeline = runningPipelines.get(runId);
+  if (!existingPipeline) {
+    console.log('[handleStopRun] No running pipeline for ' + runId);
+    sendJson(res, 200, { message: "No running pipeline to stop" });
+    return;
+  }
+
+  console.log('[handleStopRun] Interrupting pipeline for ' + runId + '...');
+  setInterrupted(true);
+
+  const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
+  const result = await Promise.race([
+    existingPipeline.then(() => 'done' as const),
+    timeoutPromise,
+  ]);
+
+  if (result === 'timeout') {
+    console.warn('[handleStopRun] Pipeline for ' + runId + ' did not stop within 30s, force-removing');
+    runningPipelines.delete(runId);
+    setTimeout(() => setInterrupted(false), 5_000);
+  } else {
+    console.log('[handleStopRun] Pipeline for ' + runId + ' stopped successfully');
+    setInterrupted(false);
+  }
+
+  sendJson(res, 200, { message: "Pipeline stopped" });
+}
+
+
 async function handleContinueRun(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1237,6 +1279,13 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
       await handleRedoRun(req, res, runId, url);
       return;
     }
+
+    if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "stop") {
+      const runId = decodeURIComponent(pathParts[1]);
+      await handleStopRun(req, res, runId);
+      return;
+    }
+
 
     if (method === "GET" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "events") {
       const runId = decodeURIComponent(pathParts[1]);

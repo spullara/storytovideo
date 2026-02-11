@@ -226,6 +226,15 @@ function renderStageProgress() {
       item.classList.add("stage-current");
       item.textContent += " - current";
 
+      // Show Stop button when actively executing
+      if (isRunActivelyExecuting(run)) {
+        const stopBtn = document.createElement("button");
+        stopBtn.className = "stop-button";
+        stopBtn.textContent = "Stop";
+        stopBtn.onclick = () => handleStopClick();
+        item.append(" ", stopBtn);
+      }
+
       // Always allow redo for current stage
       const redoBtn = document.createElement("button");
       redoBtn.className = "redo-button";
@@ -1089,6 +1098,31 @@ async function handleRedoClick(stage) {
     renderRunDetails();
   }
 }
+
+async function handleStopClick() {
+  if (!state.activeRunId) {
+    setGlobalError("No active run selected.");
+    return;
+  }
+  try {
+    await requestJson(`/runs/${encodeURIComponent(state.activeRunId)}/stop`, {
+      method: "POST",
+      body: "{}",
+    });
+    appendEvent(
+      createEventEntry({
+        title: "Stop pipeline",
+        message: "Pipeline stop requested",
+      }),
+    );
+    setGlobalError("");
+  } catch (error) {
+    setGlobalError(`Failed to stop pipeline: ${error.message}`);
+  } finally {
+    renderRunDetails();
+  }
+}
+
 
 function startPollingFallback() {
   if (state.pollTimer) {

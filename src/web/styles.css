@@ -339,6 +339,25 @@ dd {
   transform: none;
 }
 
+.stop-button {
+  width: auto;
+  margin: 0 0 0 0.4rem;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.2s;
+}
+
+.stop-button:hover {
+  background: #c82333;
+  transform: translateY(-1px);
+}
+
 .feed-list {
   display: grid;
   gap: 0.45rem;
