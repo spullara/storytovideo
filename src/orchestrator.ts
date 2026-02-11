@@ -870,18 +870,35 @@ export async function runPipeline(
 
     state.currentStage = stageName;
 
-    try {
-      state = await stageRunners[stageName](state, options);
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(`\nError in stage ${stageName}: ${errMsg}`);
-      state.errors.push({
-        stage: stageName,
-        error: errMsg,
-        timestamp: new Date().toISOString(),
-      });
-      await saveState({ state });
-      throw error;
+    // Re-run stage until it completes (handles partial completions from AI agent hitting maxSteps)
+    while (!state.completedStages.includes(stageName)) {
+      // Check for interruption before each attempt
+      if (interrupted) {
+        console.log("\nInterrupted during stage retry. Saving state...");
+        state.interrupted = true;
+        await saveState({ state });
+        console.log("Pipeline interrupted. Resume with: storytovideo <story> --resume");
+        return;
+      }
+
+      try {
+        state = await stageRunners[stageName](state, options);
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error(`\nError in stage ${stageName}: ${errMsg}`);
+        state.errors.push({
+          stage: stageName,
+          error: errMsg,
+          timestamp: new Date().toISOString(),
+        });
+        await saveState({ state });
+        throw error;
+      }
+
+      if (!state.completedStages.includes(stageName)) {
+        console.log(`[${stageName}] Stage incomplete, re-running...`);
+        await saveState({ state });
+      }
     }
 
     delete state.pendingStageInstructions[stageName];
