@@ -197,6 +197,8 @@ const runStore = new RunStore(RUN_DB_PATH);
 const runEventStream = new RunEventStream();
 const stateSnapshotByRunId = new Map<string, StateSnapshot>();
 const stateMonitorByRunId = new Map<string, NodeJS.Timeout>();
+/** Track running pipeline promises so we can await them during redo */
+const runningPipelines = new Map<string, Promise<void>>();
 let shutdownReason: string | null = null;
 let shutdownInProgress = false;
 let processExitLogged = false;
@@ -746,6 +748,12 @@ async function runInBackground(runId: string, resume = false): Promise<void> {
     return;
   }
 
+  // If there's already a pipeline running for this run, don't start another
+  if (runningPipelines.has(runId)) {
+    console.warn(`[runInBackground] Pipeline already running for ${runId}, skipping`);
+    return;
+  }
+
   runStore.patch(runId, {
     status: "running",
     startedAt: new Date().toISOString(),
@@ -755,69 +763,74 @@ async function runInBackground(runId: string, resume = false): Promise<void> {
   emitRunStatusEvent(runId, "running");
   startRunStateMonitor(runId);
 
-  try {
-    const pipelineOptions = resume
-      ? { ...record.options, resume: true }
-      : record.options;
-    await runPipeline(record.storyText, pipelineOptions);
-    pollRunState(runId);
-    const state = loadState(record.outputDir);
-    const currentStage = state?.currentStage ?? record.currentStage;
-    const completedStages = state?.completedStages ?? record.completedStages;
-    const isAwaitingReview = Boolean(record.options.reviewMode && state?.awaitingUserReview);
+  const pipeline = (async () => {
+    try {
+      const pipelineOptions = resume
+        ? { ...record.options, resume: true }
+        : record.options;
+      await runPipeline(record.storyText, pipelineOptions);
+      pollRunState(runId);
+      const state = loadState(record.outputDir);
+      const currentStage = state?.currentStage ?? record.currentStage;
+      const completedStages = state?.completedStages ?? record.completedStages;
+      const isAwaitingReview = Boolean(record.options.reviewMode && state?.awaitingUserReview);
 
-    if (isAwaitingReview) {
+      if (isAwaitingReview) {
+        runStore.patch(runId, {
+          status: "awaiting_review",
+          completedAt: undefined,
+          currentStage,
+          completedStages,
+        });
+        emitRunStatusEvent(runId, "awaiting_review");
+        emitLogEvent(runId, `Awaiting user review before stage ${currentStage}`);
+        return;
+      }
+
       runStore.patch(runId, {
-        status: "awaiting_review",
-        completedAt: undefined,
+        status: "completed",
+        completedAt: new Date().toISOString(),
         currentStage,
         completedStages,
       });
-      emitRunStatusEvent(runId, "awaiting_review");
-      emitLogEvent(runId, `Awaiting user review before stage ${currentStage}`);
-      return;
+      emitRunStatusEvent(runId, "completed");
+    } catch (error) {
+      pollRunState(runId);
+      const message = error instanceof Error ? error.message : String(error);
+      const state = loadState(record.outputDir);
+      const failedStage = state?.currentStage ?? record.currentStage;
+      const completedStages = state?.completedStages ?? record.completedStages;
+      const lifecycleContext = shutdownReason ? `shutdown:${shutdownReason}` : "running";
+      runStore.patch(runId, {
+        status: "failed",
+        completedAt: new Date().toISOString(),
+        error: message,
+        currentStage: failedStage,
+        completedStages,
+      });
+      emitRunStatusEvent(runId, "failed", message);
+      emitLogEvent(
+        runId,
+        `Run failed at stage ${failedStage} (source=pipeline_error lifecycle=${lifecycleContext}): ${message}`,
+        "error",
+      );
+      appendServerDiagnostic("run_failure", {
+        runId,
+        resume,
+        outputDir: record.outputDir,
+        stage: failedStage,
+        message,
+        lifecycleContext,
+        error: normalizeDiagnosticValue(error),
+        completedStages,
+      });
+    } finally {
+      runningPipelines.delete(runId);
+      stopRunStateMonitor(runId);
     }
+  })();
 
-    runStore.patch(runId, {
-      status: "completed",
-      completedAt: new Date().toISOString(),
-      currentStage,
-      completedStages,
-    });
-    emitRunStatusEvent(runId, "completed");
-  } catch (error) {
-    pollRunState(runId);
-    const message = error instanceof Error ? error.message : String(error);
-    const state = loadState(record.outputDir);
-    const failedStage = state?.currentStage ?? record.currentStage;
-    const completedStages = state?.completedStages ?? record.completedStages;
-    const lifecycleContext = shutdownReason ? `shutdown:${shutdownReason}` : "running";
-    runStore.patch(runId, {
-      status: "failed",
-      completedAt: new Date().toISOString(),
-      error: message,
-      currentStage: failedStage,
-      completedStages,
-    });
-    emitRunStatusEvent(runId, "failed", message);
-    emitLogEvent(
-      runId,
-      `Run failed at stage ${failedStage} (source=pipeline_error lifecycle=${lifecycleContext}): ${message}`,
-      "error",
-    );
-    appendServerDiagnostic("run_failure", {
-      runId,
-      resume,
-      outputDir: record.outputDir,
-      stage: failedStage,
-      message,
-      lifecycleContext,
-      error: normalizeDiagnosticValue(error),
-      completedStages,
-    });
-  } finally {
-    stopRunStateMonitor(runId);
-  }
+  runningPipelines.set(runId, pipeline);
 }
 
 async function handleCreateRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -999,11 +1012,15 @@ async function handleRedoRun(
     return;
   }
 
-  // If run is actively executing, interrupt it first
-  if (isRunActivelyExecuting(run.status)) {
+  // If there's a running pipeline, interrupt and wait for it to finish
+  const existingPipeline = runningPipelines.get(runId);
+  if (existingPipeline) {
     setInterrupted(true);
-    // Give the pipeline a moment to notice the signal and save state
-    await new Promise(r => setTimeout(r, 500));
+    // Wait for the old pipeline to actually finish (30s timeout as safety net)
+    await Promise.race([
+      existingPipeline,
+      new Promise(r => setTimeout(r, 30_000)),
+    ]);
     setInterrupted(false);
   }
 
