@@ -26,6 +26,7 @@ import {
   type RunEventType,
 } from "./server-events";
 import { loadState, saveState } from "./tools/state";
+import { setInterrupted } from "./signals";
 import type { PipelineOptions, PipelineState } from "./types";
 
 
@@ -998,16 +999,12 @@ async function handleRedoRun(
     return;
   }
 
-  // Allow redo for completed, failed, and awaiting_review runs
-  if (!["completed", "failed", "awaiting_review"].includes(run.status)) {
-    sendJson(res, 409, { error: `Cannot redo run with status: ${run.status}` });
-    return;
-  }
-
-  // Block if run is actively executing
+  // If run is actively executing, interrupt it first
   if (isRunActivelyExecuting(run.status)) {
-    sendRunMutationLockedResponse(res, run);
-    return;
+    setInterrupted(true);
+    // Give the pipeline a moment to notice the signal and save state
+    await new Promise(r => setTimeout(r, 500));
+    setInterrupted(false);
   }
 
   // Parse and validate stage query parameter

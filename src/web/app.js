@@ -226,14 +226,12 @@ function renderStageProgress() {
       item.classList.add("stage-current");
       item.textContent += " - current";
 
-      // Allow redo for current stage when run is not actively executing
-      if (!isRunActivelyExecuting(run)) {
-        const redoBtn = document.createElement("button");
-        redoBtn.className = "redo-button";
-        redoBtn.textContent = "Redo";
-        redoBtn.onclick = () => handleRedoClick(stage);
-        item.append(" ", redoBtn);
-      }
+      // Always allow redo for current stage
+      const redoBtn = document.createElement("button");
+      redoBtn.className = "redo-button";
+      redoBtn.textContent = "Redo";
+      redoBtn.onclick = () => handleRedoClick(stage);
+      item.append(" ", redoBtn);
     } else {
       item.classList.add("stage-pending");
       item.textContent += " - pending";
