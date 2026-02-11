@@ -1017,11 +1017,22 @@ async function handleRedoRun(
   if (existingPipeline) {
     setInterrupted(true);
     // Wait for the old pipeline to actually finish (30s timeout as safety net)
-    await Promise.race([
-      existingPipeline,
-      new Promise(r => setTimeout(r, 30_000)),
+    const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
+    const result = await Promise.race([
+      existingPipeline.then(() => 'done' as const),
+      timeoutPromise,
     ]);
-    setInterrupted(false);
+    if (result === 'timeout') {
+      // Old pipeline didn't finish in time — force-remove it from the map
+      // so the new pipeline can start. Keep interrupted=true so the old
+      // pipeline will stop at the next checkpoint.
+      console.warn(`[handleRedoRun] Pipeline for ${runId} did not stop within 30s, force-removing`);
+      runningPipelines.delete(runId);
+      // Clear interrupted after a delay to give old pipeline time to see it
+      setTimeout(() => setInterrupted(false), 5_000);
+    } else {
+      setInterrupted(false);
+    }
   }
 
   // Parse and validate stage query parameter
