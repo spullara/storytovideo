@@ -820,11 +820,19 @@ export async function runPipeline(
 
   // Before the stage loop, check if any completed stage has pending instructions
   // If so, remove it from completedStages so it gets re-run
-  for (const stageName of state.completedStages) {
+  const stagesToRerun: string[] = [];
+  for (const stageName of [...state.completedStages]) {
     if (state.pendingStageInstructions[stageName]?.length > 0) {
       console.log(`Re-running completed stage ${stageName} due to pending instructions`);
-      state.completedStages = state.completedStages.filter(s => s !== stageName);
+      stagesToRerun.push(stageName);
     }
+  }
+  if (stagesToRerun.length > 0) {
+    state.completedStages = state.completedStages.filter(s => !stagesToRerun.includes(s));
+    // Update currentStage to the earliest stage being re-run so the UI shows the correct stage
+    const earliestIdx = Math.min(...stagesToRerun.map(s => STAGE_ORDER.indexOf(s as StageName)));
+    state.currentStage = STAGE_ORDER[earliestIdx];
+    await saveState({ state });
   }
 
   for (const stageName of STAGE_ORDER) {
