@@ -17,7 +17,6 @@ export async function generateVideo(params: {
   durationSeconds: 4 | 6 | 8;
   startFramePath: string;
   endFramePath: string;
-  referenceImagePaths?: string[];
   outputDir: string;
   dryRun?: boolean;
 }): Promise<{ shotNumber: number; path: string; duration: number }> {
@@ -78,8 +77,8 @@ export async function generateVideo(params: {
         console.log(`[generateVideo] End frame uploaded: ${endAssetId}`);
 
         // Convert duration to frame count (fps=16)
-        const length = 16 * durationSeconds;
-        console.log(`[generateVideo] Duration: ${durationSeconds}s → ${length} frames (fps=16)`);
+        const length = 16 * durationSeconds + 1;
+        console.log(`[generateVideo] Duration: ${durationSeconds}s → ${length} frames (16*${durationSeconds}+1, fps=16)`);
 
         // Run the frame_to_video workflow
         console.log(`[generateVideo] Running frame_to_video workflow for shot ${shotNumber}`);
@@ -152,7 +151,6 @@ export const generateVideoTool = {
     durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]).describe("Video duration in seconds"),
     startFramePath: z.string().describe("Path to start frame image"),
     endFramePath: z.string().describe("Path to end frame image"),
-    referenceImagePaths: z.array(z.string()).optional().describe("Paths to reference images (up to 3)"),
     outputDir: z.string().describe("Output directory for video file"),
     dryRun: z.boolean().optional().describe("Return placeholder without calling API"),
   }),
