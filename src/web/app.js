@@ -226,12 +226,11 @@ function renderStageProgress() {
       item.classList.add("stage-current");
       item.textContent += " - current";
 
-      // Allow redo for current stage if run is failed or awaiting_review
-      if (["failed", "awaiting_review"].includes(run.status)) {
+      // Allow redo for current stage when run is not actively executing
+      if (!isRunActivelyExecuting(run)) {
         const redoBtn = document.createElement("button");
         redoBtn.className = "redo-button";
         redoBtn.textContent = "Redo";
-        redoBtn.disabled = isRunActivelyExecuting(run);
         redoBtn.onclick = () => handleRedoClick(stage);
         item.append(" ", redoBtn);
       }
