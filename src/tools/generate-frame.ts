@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { getGoogleClient } from "../google-client";
+import { uploadAsset, runWorkflow, pollJob, downloadAsset } from "../comfy-client";
 import type { Shot, AssetLibrary } from "../types";
 import * as fs from "fs";
 import * as path from "path";
 
 /**
- * Generates start/end keyframe images for shots using Nano Banana (gemini-2.5-flash-image).
+ * Generates start/end keyframe images for shots using ComfyUI.
  * For first_last_frame shots: generates both start and end frames.
  * For extension shots: returns immediately (no frames needed).
  */
@@ -72,7 +72,7 @@ export async function generateFrame(params: {
 }
 
 /**
- * Generates a single frame (start or end) with reference images.
+ * Generates a single frame (start or end) with reference images using ComfyUI.
  */
 async function generateSingleFrame(params: {
   shot: Shot;
@@ -93,8 +93,6 @@ async function generateSingleFrame(params: {
     outputPath,
   } = params;
 
-  const client = getGoogleClient();
-
   // Build the prompt
   const framePrompt = isEndFrame ? shot.endFramePrompt : shot.startFramePrompt;
   const prompt = buildFramePrompt({
@@ -106,96 +104,78 @@ async function generateSingleFrame(params: {
     cameraDirection: shot.cameraDirection,
   });
 
-  // Collect reference images
-  const imageParts: Array<{ inlineData: { mimeType: string; data: string } }> =
-    [];
+  // Collect reference image file paths (priority: location > character > continuity)
+  const referenceImagePaths: string[] = [];
 
-  // Add location reference image if available
+  // Add location reference image if available (priority 1)
   const locationRef = assetLibrary.locationImages[shot.location];
   if (locationRef && fs.existsSync(locationRef)) {
-    const locationData = fs.readFileSync(locationRef, "base64");
-    imageParts.push({
-      inlineData: { mimeType: "image/png", data: locationData },
-    });
+    referenceImagePaths.push(locationRef);
   }
 
-  // Add character reference images (up to 2)
-  for (let i = 0; i < Math.min(shot.charactersPresent.length, 2); i++) {
-    const charName = shot.charactersPresent[i];
+  // Add first character reference image if available (priority 2)
+  if (shot.charactersPresent.length > 0) {
+    const charName = shot.charactersPresent[0];
     const charRefs = assetLibrary.characterImages[charName];
     if (charRefs) {
       // Prefer front angle, fall back to angle
       const refPath = charRefs.front || charRefs.angle;
       if (refPath && fs.existsSync(refPath)) {
-        const charData = fs.readFileSync(refPath, "base64");
-        imageParts.push({
-          inlineData: { mimeType: "image/png", data: charData },
-        });
+        referenceImagePaths.push(refPath);
       }
     }
   }
 
+  // Add continuity frame if available (priority 3)
   // For start frame, add the previous shot's end frame for cross-shot continuity
   if (!isEndFrame && previousEndFramePath && fs.existsSync(previousEndFramePath)) {
-    const prevEndData = fs.readFileSync(previousEndFramePath, "base64");
-    imageParts.push({
-      inlineData: { mimeType: "image/png", data: prevEndData },
-    });
+    referenceImagePaths.push(previousEndFramePath);
   }
 
   // For end frame, add the start frame as additional input for visual continuity
   if (isEndFrame && previousStartFramePath && fs.existsSync(previousStartFramePath)) {
-    const startFrameData = fs.readFileSync(previousStartFramePath, "base64");
-    imageParts.push({
-      inlineData: { mimeType: "image/png", data: startFrameData },
+    referenceImagePaths.push(previousStartFramePath);
+  }
+
+  // Limit to max 3 asset IDs
+  const limitedReferencePaths = referenceImagePaths.slice(0, 3);
+
+  // Upload reference images and collect asset IDs
+  const assetIds: string[] = [];
+  for (const refPath of limitedReferencePaths) {
+    const assetId = await uploadAsset(refPath);
+    assetIds.push(assetId);
+  }
+
+  // Run appropriate workflow based on whether we have reference images
+  let jobId: string;
+  if (assetIds.length > 0) {
+    // Use image_edit workflow with reference images
+    jobId = await runWorkflow("image_edit", {
+      prompt,
+      input_asset_ids: assetIds,
+      width: 1328,
+      height: 748,
+    });
+  } else {
+    // Use text_to_image workflow without reference images
+    jobId = await runWorkflow("text_to_image", {
+      prompt,
+      width: 1328,
+      height: 748,
     });
   }
 
-  // Build the request
-  const contents = [
-    {
-      role: "user" as const,
-      parts: [
-        { text: prompt },
-        ...imageParts,
-      ],
-    },
-  ];
+  // Poll job until completion
+  const jobResult = await pollJob(jobId);
 
-  // Call Nano Banana API
-  const response = await client.models.generateContent({
-    model: "gemini-2.5-flash-image",
-    contents,
-    config: {
-      responseModalities: ["Image"],
-    } as any,
-  });
-
-  // Extract the generated image from response
-  if (!response.candidates || response.candidates.length === 0) {
-    throw new Error("No candidates in response from Nano Banana API");
+  if (jobResult.outputAssetIds.length === 0) {
+    throw new Error(`Job ${jobId} completed but produced no output assets`);
   }
 
-  const candidate = response.candidates[0];
-  if (!candidate.content || !candidate.content.parts) {
-    throw new Error("No content parts in response candidate");
-  }
-
-  // Find the image part
-  const imagePart = candidate.content.parts.find(
-    (part: any) => part.inlineData && part.inlineData.mimeType === "image/png"
-  );
-
-  if (!imagePart || !imagePart.inlineData || !imagePart.inlineData.data) {
-    throw new Error("No image data in response");
-  }
-
-  // Save the image to disk
-  const imageData = imagePart.inlineData.data;
-  const imageBuffer = typeof imageData === "string"
-    ? Buffer.from(imageData, "base64")
-    : Buffer.from(imageData as any);
-  fs.writeFileSync(outputPath, imageBuffer);
+  // Download the first output asset
+  const outputAssetId = jobResult.outputAssetIds[0];
+  await downloadAsset(outputAssetId, outputPath);
 
   return outputPath;
 }
@@ -247,7 +227,7 @@ Aspect ratio: 16:9`;
  */
 export const generateFrameTool = {
   description:
-    "Generate start and end keyframe images for a shot using Nano Banana (gemini-2.5-flash-image).",
+    "Generate start and end keyframe images for a shot using ComfyUI.",
   parameters: z.object({
     shot: z.object({
       shotNumber: z.number(),
