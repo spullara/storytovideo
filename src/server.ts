@@ -1173,8 +1173,9 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
         return;
       }
 
+      let stats;
       try {
-        const stats = statSync(mediaPath);
+        stats = statSync(mediaPath);
         if (!stats.isFile()) {
           sendJson(res, 404, { error: "Media file not found" });
           return;
@@ -1184,10 +1185,59 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
         return;
       }
 
-      res.statusCode = 200;
+      const fileSize = stats.size;
+      const rangeHeader = req.headers.range;
+
+      res.setHeader("Accept-Ranges", "bytes");
       res.setHeader("Content-Type", detectMimeType(mediaPath));
       res.setHeader("Cache-Control", "no-store");
-      const stream = createReadStream(mediaPath);
+
+      if (!rangeHeader) {
+        // No Range header: return full file with 200 OK
+        res.statusCode = 200;
+        res.setHeader("Content-Length", fileSize);
+        const stream = createReadStream(mediaPath);
+        stream.on("error", () => {
+          if (!res.writableEnded) {
+            res.statusCode = 500;
+            res.end();
+          }
+        });
+        stream.pipe(res);
+        return;
+      }
+
+      // Parse Range header (format: bytes=START-END)
+      const rangeMatch = rangeHeader.match(/bytes=(\d+)?-(\d+)?/);
+      if (!rangeMatch) {
+        // Invalid range format
+        res.statusCode = 416;
+        res.setHeader("Content-Range", `bytes */${fileSize}`);
+        res.end();
+        return;
+      }
+
+      const startStr = rangeMatch[1];
+      const endStr = rangeMatch[2];
+
+      let start = startStr ? parseInt(startStr, 10) : 0;
+      let end = endStr ? parseInt(endStr, 10) : fileSize - 1;
+
+      // Validate range
+      if (start > end || start >= fileSize || end >= fileSize) {
+        res.statusCode = 416;
+        res.setHeader("Content-Range", `bytes */${fileSize}`);
+        res.end();
+        return;
+      }
+
+      // Return 206 Partial Content
+      res.statusCode = 206;
+      const contentLength = end - start + 1;
+      res.setHeader("Content-Length", contentLength);
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
+
+      const stream = createReadStream(mediaPath, { start, end });
       stream.on("error", () => {
         if (!res.writableEnded) {
           res.statusCode = 500;
