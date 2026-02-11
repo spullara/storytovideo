@@ -113,6 +113,10 @@ export async function generateVideo(params: {
         return { shotNumber, path: outputPath, duration: durationSeconds };
       } catch (error: any) {
         lastError = error;
+        // Don't retry if cancelled due to pipeline interruption
+        if (error?.message?.includes('cancelled due to pipeline interruption')) {
+          throw error;
+        }
         const backoffMs = Math.pow(2, attempt - 1) * 5000; // Exponential backoff: 5s, 10s, 20s, 40s, 80s
         if (attempt < maxRetries) {
           console.warn(`[generateVideo] Shot ${shotNumber}: Error on attempt ${attempt}/${maxRetries}. Retrying in ${backoffMs}ms...`);

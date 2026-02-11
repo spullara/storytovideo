@@ -127,6 +127,10 @@ export async function generateAsset(params: {
       throw new Error("No output asset IDs in job result");
     } catch (error) {
       lastError = error as Error;
+      // Don't retry if cancelled due to pipeline interruption
+      if ((error as Error)?.message?.includes('cancelled due to pipeline interruption')) {
+        throw error;
+      }
       if (attempt < 3) {
         // Wait before retry
         await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));

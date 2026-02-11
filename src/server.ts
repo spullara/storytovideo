@@ -1012,9 +1012,12 @@ async function handleRedoRun(
     return;
   }
 
+  console.log('[handleRedoRun] Redo requested for run ' + runId);
+
   // If there's a running pipeline, interrupt and wait for it to finish
   const existingPipeline = runningPipelines.get(runId);
   if (existingPipeline) {
+    console.log('[handleRedoRun] Interrupting running pipeline for ' + runId + '...');
     setInterrupted(true);
     // Wait for the old pipeline to actually finish (30s timeout as safety net)
     const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
@@ -1031,8 +1034,11 @@ async function handleRedoRun(
       // Clear interrupted after a delay to give old pipeline time to see it
       setTimeout(() => setInterrupted(false), 5_000);
     } else {
+      console.log('[handleRedoRun] Pipeline for ' + runId + ' stopped successfully');
       setInterrupted(false);
     }
+  } else {
+    console.log('[handleRedoRun] No running pipeline for ' + runId);
   }
 
   // Parse and validate stage query parameter
@@ -1061,6 +1067,8 @@ async function handleRedoRun(
   // Save the cleared state
   await saveState({ state });
 
+  console.log('[handleRedoRun] State cleared. Remaining completedStages: ' + (state.completedStages.join(', ') || '(none)'));
+
   // Update run record
   const updatedRecord = runStore.patch(runId, {
     status: "queued",
@@ -1074,6 +1082,7 @@ async function handleRedoRun(
   emitRunStatusEvent(runId, "queued");
   emitLogEvent(runId, `Redoing from stage: ${stage}`);
   startRunStateMonitor(runId);
+  console.log('[handleRedoRun] Starting new pipeline for ' + runId + ' from stage ' + stage);
   setImmediate(() => {
     void runInBackground(runId, true);
   });
