@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { uploadAsset, runWorkflow, pollJob, downloadAsset, checkJob } from "../comfy-client";
+import { createImage, editImage } from "../reve-client";
 import * as fs from "fs";
 import * as path from "path";
 
 /**
- * Generates reference images for characters and locations using ComfyUI.
+ * Generates reference images for characters and locations using the Reve API.
  * Returns file path for the generated image.
  */
 export async function generateAsset(params: {
@@ -15,11 +15,6 @@ export async function generateAsset(params: {
   outputDir: string;
   dryRun?: boolean;
   referenceImagePath?: string;
-  pendingJobStore?: {
-    get: (key: string) => { jobId: string; outputPath: string } | undefined;
-    set: (key: string, value: { jobId: string; outputPath: string }) => Promise<void>;
-    delete: (key: string) => Promise<void>;
-  };
 }): Promise<{ key: string; path: string }> {
   const {
     characterName,
@@ -29,7 +24,6 @@ export async function generateAsset(params: {
     outputDir,
     dryRun = false,
     referenceImagePath,
-    pendingJobStore,
   } = params;
 
   // Determine asset type and key
@@ -52,25 +46,6 @@ export async function generateAsset(params: {
   }
 
   const key = `${assetType}:${assetName}:${angleType}`;
-
-  // Check for a pending job from a previous run
-  const pendingKey = `asset:${key}`;
-  if (pendingJobStore) {
-    const pending = pendingJobStore.get(pendingKey);
-    if (pending) {
-      console.log(`[generateAsset] Found pending job ${pending.jobId} for ${key}, checking status...`);
-      const check = await checkJob(pending.jobId);
-      if (check?.status === 'completed' && check.outputAssetIds.length > 0) {
-        console.log(`[generateAsset] Pending job completed! Downloading result...`);
-        await downloadAsset(check.outputAssetIds[0], pending.outputPath);
-        await pendingJobStore.delete(pendingKey);
-        console.log(`[generateAsset] Asset ${key} recovered from pending job`);
-        return { key, path: pending.outputPath };
-      }
-      console.log(`[generateAsset] Pending job status: ${check?.status ?? 'unknown'}, starting fresh`);
-      await pendingJobStore.delete(pendingKey);
-    }
-  }
 
   // Dry-run mode: return placeholder path
   if (dryRun) {
@@ -109,7 +84,7 @@ export async function generateAsset(params: {
     console.log(`[generateAsset] Generating new ${assetType}: ${assetName}`);
   }
 
-  // Call ComfyUI API with retry logic
+  // Call Reve API with retry logic
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -121,44 +96,17 @@ export async function generateAsset(params: {
       const filename = `${assetName.toLowerCase()}_${angleType}.png`;
       const filePath = path.join(assetDir, filename);
 
-      let jobId: string;
+      let resultPath: string;
 
       if (isEditing) {
-        // Image edit workflow
-        const assetId = await uploadAsset(referenceImagePath!);
-        jobId = await runWorkflow("image_edit", {
-          prompt,
-          input_asset_ids: [assetId],
-        });
+        // Image edit via Reve API
+        resultPath = await editImage(referenceImagePath!, prompt, { outputPath: filePath });
       } else {
-        // Text to image workflow
-        jobId = await runWorkflow("text_to_image", {
-          prompt,
-          width: 1328,
-          height: 1328,
-        });
+        // Text to image via Reve API
+        resultPath = await createImage(prompt, { aspectRatio: "1:1", outputPath: filePath });
       }
 
-      // Persist job ID so it can be recovered after restart
-      if (pendingJobStore) {
-        await pendingJobStore.set(pendingKey, { jobId, outputPath: filePath });
-      }
-
-      // Poll for job completion
-      const result = await pollJob(jobId);
-
-      // Download the output asset
-      if (result.outputAssetIds.length > 0) {
-        const outputAssetId = result.outputAssetIds[0];
-        await downloadAsset(outputAssetId, filePath);
-        // Clean up pending job entry
-        if (pendingJobStore) {
-          await pendingJobStore.delete(pendingKey);
-        }
-        return { key, path: filePath };
-      }
-
-      throw new Error("No output asset IDs in job result");
+      return { key, path: resultPath };
     } catch (error) {
       lastError = error as Error;
       // Don't retry if cancelled due to pipeline interruption
@@ -185,7 +133,7 @@ export async function generateAsset(params: {
  */
 export const generateAssetTool = {
   description:
-    "Generate reference images for characters and locations using ComfyUI. When referenceImagePath is provided, edits the reference image to create variations (e.g., different angles) while maintaining exact consistency in appearance, clothing, features, and color palette.",
+    "Generate reference images for characters and locations using the Reve API. When referenceImagePath is provided, edits the reference image to create variations (e.g., different angles) while maintaining exact consistency in appearance, clothing, features, and color palette.",
   parameters: z.object({
     characterName: z.string().optional(),
     locationName: z.string().optional(),

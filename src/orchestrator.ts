@@ -382,11 +382,6 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
           ...params,
           dryRun: options.dryRun,
           outputDir: options.outputDir,
-          pendingJobStore: {
-            get: (key) => state.pendingJobs[key],
-            set: async (key, value) => { state.pendingJobs[key] = value; await saveState({ state }); },
-            delete: async (key) => { delete state.pendingJobs[key]; await saveState({ state }); },
-          },
         });
         state.generatedAssets[result.key] = result.path;
         // Update asset library
@@ -530,11 +525,6 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
           outputDir: options.outputDir,
           dryRun: options.dryRun,
           previousEndFramePath: params.previousEndFramePath,
-          pendingJobStore: {
-            get: (key) => state.pendingJobs[key],
-            set: async (key, value) => { state.pendingJobs[key] = value; await saveState({ state }); },
-            delete: async (key) => { delete state.pendingJobs[key]; await saveState({ state }); },
-          },
         });
         state.generatedFrames[result.shotNumber] = {
           start: result.startPath,
