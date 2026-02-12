@@ -287,6 +287,7 @@ export const generateFrameTool = {
       cameraDirection: z.string(),
       charactersPresent: z.array(z.string()),
       location: z.string(),
+      continuousFromPrevious: z.boolean(),
     }).describe("The shot to generate keyframes for"),
     artStyle: z.string().describe("The visual art style for the entire video"),
     assetLibrary: z.object({

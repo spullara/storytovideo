@@ -25,6 +25,7 @@ export interface Shot {
   cameraDirection: string;
   charactersPresent: string[];
   location: string;
+  continuousFromPrevious: boolean;
 }
 
 export interface Scene {
