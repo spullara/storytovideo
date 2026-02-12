@@ -42,6 +42,29 @@ export async function generateFrame(params: {
     };
   }
 
+  // Hard continuity: copy previous shot's end frame as this shot's start frame
+  if (shot.continuousFromPrevious && previousEndFramePath && fs.existsSync(previousEndFramePath)) {
+    console.log(`[generateFrame] Shot ${shot.shotNumber}: copying previous end frame for continuity`);
+    fs.copyFileSync(previousEndFramePath, startPath);
+
+    // Generate only the end frame
+    const endFramePath = await generateSingleFrame({
+      shot,
+      artStyle,
+      assetLibrary,
+      isEndFrame: true,
+      previousStartFramePath: startPath,  // use the copied start frame as reference for end frame
+      outputPath: endPath,
+      pendingJobStore,
+    });
+
+    return {
+      shotNumber: shot.shotNumber,
+      startPath,
+      endPath: endFramePath,
+    };
+  }
+
   try {
     // Generate start frame
     const startFramePath = await generateSingleFrame({
