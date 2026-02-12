@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { uploadAsset, runWorkflow, pollJob, downloadAsset, checkJob } from "../comfy-client";
+import { createImage, remixImage } from "../reve-client";
 import type { Shot, AssetLibrary } from "../types";
 import * as fs from "fs";
 import * as path from "path";
 
 /**
- * Generates start/end keyframe images for shots using ComfyUI.
+ * Generates start/end keyframe images for shots using the Reve API.
  * For first_last_frame shots: generates both start and end frames.
  * For extension shots: returns immediately (no frames needed).
  */
@@ -16,13 +16,8 @@ export async function generateFrame(params: {
   outputDir: string;
   dryRun?: boolean;
   previousEndFramePath?: string;
-  pendingJobStore?: {
-    get: (key: string) => { jobId: string; outputPath: string } | undefined;
-    set: (key: string, value: { jobId: string; outputPath: string }) => Promise<void>;
-    delete: (key: string) => Promise<void>;
-  };
 }): Promise<{ shotNumber: number; startPath?: string; endPath?: string }> {
-  const { shot, artStyle, assetLibrary, outputDir, dryRun = false, previousEndFramePath, pendingJobStore } = params;
+  const { shot, artStyle, assetLibrary, outputDir, dryRun = false, previousEndFramePath } = params;
 
   // Create frames directory if it doesn't exist
   const framesDir = path.join(outputDir, "frames");
@@ -55,7 +50,6 @@ export async function generateFrame(params: {
       isEndFrame: true,
       previousStartFramePath: startPath,  // use the copied start frame as reference for end frame
       outputPath: endPath,
-      pendingJobStore,
     });
 
     return {
@@ -75,7 +69,6 @@ export async function generateFrame(params: {
       previousStartFramePath: undefined,
       previousEndFramePath,
       outputPath: startPath,
-      pendingJobStore,
     });
 
     // Generate end frame (with start frame as additional input for continuity)
@@ -86,7 +79,6 @@ export async function generateFrame(params: {
       isEndFrame: true,
       previousStartFramePath: startFramePath,
       outputPath: endPath,
-      pendingJobStore,
     });
 
     return {
@@ -102,7 +94,7 @@ export async function generateFrame(params: {
 }
 
 /**
- * Generates a single frame (start or end) with reference images using ComfyUI.
+ * Generates a single frame (start or end) with reference images using the Reve API.
  */
 async function generateSingleFrame(params: {
   shot: Shot;
@@ -112,11 +104,6 @@ async function generateSingleFrame(params: {
   previousStartFramePath?: string;
   previousEndFramePath?: string;
   outputPath: string;
-  pendingJobStore?: {
-    get: (key: string) => { jobId: string; outputPath: string } | undefined;
-    set: (key: string, value: { jobId: string; outputPath: string }) => Promise<void>;
-    delete: (key: string) => Promise<void>;
-  };
 }): Promise<string> {
   const {
     shot,
@@ -126,28 +113,7 @@ async function generateSingleFrame(params: {
     previousStartFramePath,
     previousEndFramePath,
     outputPath,
-    pendingJobStore,
   } = params;
-
-  // Check for a pending job from a previous run
-  const frameType = isEndFrame ? "end" : "start";
-  const pendingKey = `frame:${shot.shotNumber}:${frameType}`;
-  if (pendingJobStore) {
-    const pending = pendingJobStore.get(pendingKey);
-    if (pending) {
-      console.log(`[generateFrame] Found pending job ${pending.jobId} for shot ${shot.shotNumber} ${frameType}, checking status...`);
-      const check = await checkJob(pending.jobId);
-      if (check?.status === 'completed' && check.outputAssetIds.length > 0) {
-        console.log(`[generateFrame] Pending job completed! Downloading result...`);
-        await downloadAsset(check.outputAssetIds[0], pending.outputPath);
-        await pendingJobStore.delete(pendingKey);
-        console.log(`[generateFrame] Frame ${shot.shotNumber} ${frameType} recovered from pending job`);
-        return pending.outputPath;
-      }
-      console.log(`[generateFrame] Pending job status: ${check?.status ?? 'unknown'}, starting fresh`);
-      await pendingJobStore.delete(pendingKey);
-    }
-  }
 
   // Build the prompt
   const framePrompt = isEndFrame ? shot.endFramePrompt : shot.startFramePrompt;
@@ -193,57 +159,36 @@ async function generateSingleFrame(params: {
     referenceImagePaths.push(previousStartFramePath);
   }
 
-  // Limit to max 3 asset IDs
-  const limitedReferencePaths = referenceImagePaths.slice(0, 3);
+  // Limit to max 4 reference images (Reve supports up to 4)
+  const limitedReferencePaths = referenceImagePaths.slice(0, 4);
 
-  // Upload reference images and collect asset IDs
-  const assetIds: string[] = [];
-  for (const refPath of limitedReferencePaths) {
-    const assetId = await uploadAsset(refPath);
-    assetIds.push(assetId);
-  }
+  if (limitedReferencePaths.length > 0) {
+    // Build <img> tag prefix to reference images by index
+    const imgTagParts: string[] = [];
+    for (let i = 0; i < limitedReferencePaths.length; i++) {
+      const refPath = limitedReferencePaths[i];
+      if (refPath === locationRef) {
+        imgTagParts.push(`<img>${i}</img> as location reference`);
+      } else if (shot.charactersPresent.length > 0 && refPath === (assetLibrary.characterImages[shot.charactersPresent[0]]?.front || assetLibrary.characterImages[shot.charactersPresent[0]]?.angle)) {
+        imgTagParts.push(`<img>${i}</img> as character reference`);
+      } else {
+        imgTagParts.push(`<img>${i}</img> as continuity reference`);
+      }
+    }
+    const imgPrefix = `Using ${imgTagParts.join(", ")}: `;
+    const remixPrompt = imgPrefix + prompt;
 
-  // Run appropriate workflow based on whether we have reference images
-  let jobId: string;
-  if (assetIds.length > 0) {
-    // Use image_edit workflow with reference images
-    jobId = await runWorkflow("image_edit", {
-      prompt,
-      input_asset_ids: assetIds,
-      width: 1328,
-      height: 748,
+    return await remixImage(remixPrompt, limitedReferencePaths, {
+      aspectRatio: "16:9",
+      outputPath,
     });
   } else {
-    // Use text_to_image workflow without reference images
-    jobId = await runWorkflow("text_to_image", {
-      prompt,
-      width: 1328,
-      height: 748,
+    // No reference images — use text-to-image generation
+    return await createImage(prompt, {
+      aspectRatio: "16:9",
+      outputPath,
     });
   }
-
-  // Persist job ID so it can be recovered after restart
-  if (pendingJobStore) {
-    await pendingJobStore.set(pendingKey, { jobId, outputPath });
-  }
-
-  // Poll job until completion
-  const jobResult = await pollJob(jobId);
-
-  if (jobResult.outputAssetIds.length === 0) {
-    throw new Error(`Job ${jobId} completed but produced no output assets`);
-  }
-
-  // Download the first output asset
-  const outputAssetId = jobResult.outputAssetIds[0];
-  await downloadAsset(outputAssetId, outputPath);
-
-  // Clean up pending job entry
-  if (pendingJobStore) {
-    await pendingJobStore.delete(pendingKey);
-  }
-
-  return outputPath;
 }
 
 /**
@@ -293,7 +238,7 @@ Aspect ratio: 16:9`;
  */
 export const generateFrameTool = {
   description:
-    "Generate start and end keyframe images for a shot using ComfyUI.",
+    "Generate start and end keyframe images for a shot using the Reve API.",
   parameters: z.object({
     shot: z.object({
       shotNumber: z.number(),
