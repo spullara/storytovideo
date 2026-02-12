@@ -755,6 +755,9 @@ async function runInBackground(runId: string, resume = false): Promise<void> {
     return;
   }
 
+  // Clear any stale interruption flag from a previous stop/redo
+  setInterrupted(false);
+
   runStore.patch(runId, {
     status: "running",
     startedAt: new Date().toISOString(),
