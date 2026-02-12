@@ -11,6 +11,8 @@ function withReviewDefaults(state: PipelineState): PipelineState {
     pendingStageInstructions: state.pendingStageInstructions ?? {},
     instructionHistory: state.instructionHistory ?? [],
     decisionHistory: state.decisionHistory ?? [],
+    // Ensure newer fields have defaults for old state files
+    pendingJobs: state.pendingJobs ?? {},
   };
 }
 
