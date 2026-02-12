@@ -64,11 +64,7 @@ function createInitialState(storyFile: string, outputDir: string): PipelineState
   };
 }
 
-function log(verbose: boolean, ...args: unknown[]): void {
-  if (verbose) {
-    console.log(...args);
-  }
-}
+
 
 function compactState(state: PipelineState): string {
   return JSON.stringify(state, null, 2);
@@ -161,7 +157,7 @@ async function runStage(
   userPrompt: string,
   tools: Record<string, any>,
   maxSteps: number,
-  verbose: boolean,
+  _verbose: boolean,
 ): Promise<PipelineState> {
   console.log(`\n=== Stage: ${stageName} ===`);
   const stageInstructions = getStageInstructions(state, stageName);
@@ -180,13 +176,21 @@ async function runStage(
     tools,
     stopWhen: stepCountIs(maxSteps),
     onStepFinish: (step: any) => {
-      if (verbose) {
-        if (step.text) {
-          console.log(`[${stageName}] Claude: ${step.text.substring(0, 200)}`);
+      if (step.text) {
+        console.log(`[${stageName}] Claude: ${step.text.substring(0, 200)}`);
+      }
+      if (step.toolCalls && step.toolCalls.length > 0) {
+        for (const tc of step.toolCalls) {
+          console.log(`[${stageName}] Tool call: ${tc.toolName}`);
         }
-        if (step.toolCalls && step.toolCalls.length > 0) {
-          for (const tc of step.toolCalls) {
-            console.log(`[${stageName}] Tool call: ${tc.toolName}`);
+      }
+      if (step.toolResults && step.toolResults.length > 0) {
+        for (const tr of step.toolResults) {
+          const resultStr = JSON.stringify(tr.result);
+          if (tr.type === 'error' || (resultStr && resultStr.includes('"error"'))) {
+            console.error(`[${stageName}] Tool error (${tr.toolName}):`, resultStr);
+          } else {
+            console.log(`[${stageName}] Tool result (${tr.toolName}): ${resultStr?.substring(0, 200) ?? '(no result)'}`);
           }
         }
       }
@@ -203,7 +207,7 @@ async function runStage(
     console.log(`[${stageName}] Token usage: input=${input}, output=${output}, total=${input + output}`);
   }
 
-  log(verbose, `[${stageName}] Final text:`, result.text?.substring(0, 300) || "(no text)");
+  console.log(`[${stageName}] Final text:`, result.text?.substring(0, 300) || "(no text)");
 
   return state;
 }
