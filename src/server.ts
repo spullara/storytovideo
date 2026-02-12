@@ -900,15 +900,11 @@ async function handleSubmitInstruction(
   const parsedBody = await readJsonBody(req);
   const parsedRequest = parseSubmitInstructionRequest(parsedBody);
 
-  // Default to the last completed stage (the one being reviewed)
-  // Fall back to currentStage if completedStages is empty
+  // Default to the first uncompleted stage (the one about to run or being retried)
+  // This matches the UI's "Add guidance for the next stage..." placeholder
   let stage = parsedRequest.stage;
   if (!stage) {
-    if (state.completedStages.length > 0) {
-      stage = state.completedStages[state.completedStages.length - 1];
-    } else {
-      stage = state.currentStage;
-    }
+    stage = STAGE_ORDER.find(s => !state.completedStages.includes(s)) ?? state.currentStage;
   }
 
   if (!stage) {
