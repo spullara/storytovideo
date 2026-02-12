@@ -1109,6 +1109,125 @@ async function handleRedoRun(
   sendJson(res, 200, { run: toRunResponse(updatedRecord) });
 }
 
+async function handleRedoItem(
+  req: IncomingMessage,
+  res: ServerResponse,
+  runId: string,
+): Promise<void> {
+  const run = runStore.get(runId);
+  if (!run) {
+    sendJson(res, 404, { error: `Run not found: ${runId}` });
+    return;
+  }
+
+  console.log('[handleRedoItem] Redo-item requested for run ' + runId);
+
+  // Parse and validate request body
+  const body = await readJsonBody(req) as Record<string, unknown> | null;
+  if (!body || typeof body !== "object") {
+    sendJson(res, 400, { error: "Request body must be a JSON object" });
+    return;
+  }
+
+  const { type, shotNumber } = body as { type?: string; shotNumber?: number };
+
+  if (!type || (type !== "frame" && type !== "video")) {
+    sendJson(res, 400, { error: 'Invalid or missing "type". Must be "frame" or "video".' });
+    return;
+  }
+
+  if (shotNumber === undefined || shotNumber === null || typeof shotNumber !== "number" || !Number.isInteger(shotNumber)) {
+    sendJson(res, 400, { error: 'Invalid or missing "shotNumber". Must be an integer.' });
+    return;
+  }
+
+  // If there's a running pipeline, interrupt and wait for it to finish
+  const existingPipeline = runningPipelines.get(runId);
+  if (existingPipeline) {
+    console.log('[handleRedoItem] Interrupting running pipeline for ' + runId + '...');
+    setInterrupted(true);
+    const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
+    const result = await Promise.race([
+      existingPipeline.then(() => 'done' as const),
+      timeoutPromise,
+    ]);
+    if (result === 'timeout') {
+      console.warn(`[handleRedoItem] Pipeline for ${runId} did not stop within 30s, force-removing`);
+      runningPipelines.delete(runId);
+      setTimeout(() => setInterrupted(false), 5_000);
+    } else {
+      console.log('[handleRedoItem] Pipeline for ' + runId + ' stopped successfully');
+      setInterrupted(false);
+    }
+  } else {
+    console.log('[handleRedoItem] No running pipeline for ' + runId);
+  }
+
+  // Load state
+  const state = loadState(run.outputDir);
+  if (!state) {
+    sendJson(res, 409, { error: "No saved state available for redo" });
+    return;
+  }
+
+  // Validate that shotNumber exists in the state
+  const hasFrame = state.generatedFrames[shotNumber] !== undefined;
+  const hasVideo = state.generatedVideos[shotNumber] !== undefined;
+  if (!hasFrame && !hasVideo) {
+    sendJson(res, 400, { error: `Shot ${shotNumber} not found in generated frames or videos` });
+    return;
+  }
+
+  // Per-item deletion based on type
+  let earliestStage: string;
+  if (type === "frame") {
+    // Delete frame and its dependent video
+    delete state.generatedFrames[shotNumber];
+    delete state.generatedVideos[shotNumber];
+    // Remove frame_generation, video_generation, and assembly from completedStages
+    state.completedStages = state.completedStages.filter(
+      s => s !== "frame_generation" && s !== "video_generation" && s !== "assembly"
+    );
+    earliestStage = "frame_generation";
+  } else {
+    // type === "video"
+    delete state.generatedVideos[shotNumber];
+    // Remove video_generation and assembly from completedStages
+    state.completedStages = state.completedStages.filter(
+      s => s !== "video_generation" && s !== "assembly"
+    );
+    earliestStage = "video_generation";
+  }
+
+  // Set currentStage to the earliest cleared stage
+  state.currentStage = earliestStage;
+
+  // Save the cleared state
+  await saveState({ state });
+
+  console.log(`[handleRedoItem] Cleared ${type} for shot ${shotNumber}. currentStage=${earliestStage}, completedStages=[${state.completedStages.join(', ')}]`);
+
+  // Update run record
+  const updatedRecord = runStore.patch(runId, {
+    status: "queued",
+    completedAt: undefined,
+    error: undefined,
+    currentStage: earliestStage,
+    completedStages: state.completedStages,
+  }) ?? run;
+
+  // Emit events
+  emitRunStatusEvent(runId, "queued");
+  emitLogEvent(runId, `Redoing ${type} for shot ${shotNumber}`);
+  startRunStateMonitor(runId);
+  console.log('[handleRedoItem] Starting new pipeline for ' + runId + ' from stage ' + earliestStage);
+  setImmediate(() => {
+    void runInBackground(runId, true);
+  });
+
+  sendJson(res, 200, { run: toRunResponse(updatedRecord), type, shotNumber });
+}
+
 async function handleStopRun(
   _req: IncomingMessage,
   res: ServerResponse,
@@ -1296,6 +1415,12 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
     if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "redo") {
       const runId = decodeURIComponent(pathParts[1]);
       await handleRedoRun(req, res, runId, url);
+      return;
+    }
+
+    if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "redo-item") {
+      const runId = decodeURIComponent(pathParts[1]);
+      await handleRedoItem(req, res, runId);
       return;
     }
 
