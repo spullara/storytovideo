@@ -319,7 +319,8 @@ async function runAssetGenerationStage(
     if (!state.generatedAssets[locKey]) neededAssets.push(locKey);
   }
 
-  if (neededAssets.length === 0) {
+  const hasPendingInstructions = (state.pendingStageInstructions["asset_generation"]?.length ?? 0) > 0;
+  if (neededAssets.length === 0 && !hasPendingInstructions) {
     console.log("[asset_generation] All assets already generated, skipping.");
     state.completedStages.push("asset_generation");
     state.currentStage = "frame_generation";
@@ -421,7 +422,6 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
   }
   if (remainingAssets.length > 0) {
     console.warn(`[asset_generation] WARNING: ${remainingAssets.length} assets still missing. NOT marking as complete — will resume on next run.`);
-    state.currentStage = "frame_generation";
     return state;
   }
   state.completedStages.push("asset_generation");
@@ -450,7 +450,8 @@ async function runFrameGenerationStage(
     return !existing || !existing.start || !existing.end;
   });
 
-  if (neededFrames.length === 0) {
+  const hasPendingInstructions = (state.pendingStageInstructions["frame_generation"]?.length ?? 0) > 0;
+  if (neededFrames.length === 0 && !hasPendingInstructions) {
     console.log("[frame_generation] All frames already generated, skipping.");
     state.completedStages.push("frame_generation");
     state.currentStage = "video_generation";
@@ -540,7 +541,6 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
   });
   if (remainingFrames.length > 0) {
     console.warn(`[frame_generation] WARNING: ${remainingFrames.length}/${allShots.length} frames still missing. NOT marking as complete — will resume on next run.`);
-    state.currentStage = "video_generation";
     return state;
   }
   state.completedStages.push("frame_generation");
@@ -566,7 +566,8 @@ async function runVideoGenerationStage(
   // Determine which videos still need generation
   const neededVideos = allShots.filter((s) => !state.generatedVideos[s.shotNumber]);
 
-  if (neededVideos.length === 0) {
+  const hasPendingInstructions = (state.pendingStageInstructions["video_generation"]?.length ?? 0) > 0;
+  if (neededVideos.length === 0 && !hasPendingInstructions) {
     console.log("[video_generation] All videos already generated, skipping.");
     state.completedStages.push("video_generation");
     state.currentStage = "assembly";
@@ -644,7 +645,6 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
   const remainingVideos = allShots.filter((s) => !state.generatedVideos[s.shotNumber]);
   if (remainingVideos.length > 0) {
     console.warn(`[video_generation] WARNING: ${remainingVideos.length}/${allShots.length} videos still missing. NOT marking as complete — will resume on next run.`);
-    state.currentStage = "assembly";
     return state;
   }
   state.completedStages.push("video_generation");
