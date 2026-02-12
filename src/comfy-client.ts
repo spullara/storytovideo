@@ -10,6 +10,15 @@ export function getComfyBaseUrl(): string {
 }
 
 /**
+ * Get authorization headers for ComfyUI API requests.
+ * Returns Bearer token header if COMFYUI_API_TOKEN is set, otherwise empty object.
+ */
+function getAuthHeaders(): Record<string, string> {
+  const token = process.env.COMFYUI_API_TOKEN;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/**
  * Upload an asset file to ComfyUI
  * @param filePath - Path to the file to upload
  * @returns Asset UUID
@@ -25,6 +34,7 @@ export async function uploadAsset(filePath: string): Promise<string> {
 
   const response = await fetch(`${baseUrl}/assets/upload`, {
     method: "POST",
+    headers: getAuthHeaders(),
     body: formData,
   });
 
@@ -54,6 +64,7 @@ export async function runWorkflow(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...getAuthHeaders(),
     },
     body: JSON.stringify(params),
   });
@@ -77,7 +88,9 @@ export async function runWorkflow(
 export async function checkJob(jobId: string): Promise<{ status: string; outputAssetIds: string[] } | null> {
   const baseUrl = getComfyBaseUrl();
   try {
-    const response = await fetch(`${baseUrl}/jobs/${jobId}`);
+    const response = await fetch(`${baseUrl}/jobs/${jobId}`, {
+      headers: getAuthHeaders(),
+    });
     if (!response.ok) return null;
     const data = await response.json() as { status: string; output_asset_ids?: string[] };
     return { status: data.status, outputAssetIds: data.output_asset_ids || [] };
@@ -105,6 +118,7 @@ export async function pollJob(
 
     const response = await fetch(`${baseUrl}/jobs/${jobId}`, {
       method: "GET",
+      headers: getAuthHeaders(),
     });
 
     if (!response.ok) {
@@ -143,6 +157,7 @@ export async function cancelJob(jobId: string): Promise<void> {
   try {
     const response = await fetch(`${baseUrl}/jobs/${jobId}/cancel`, {
       method: "POST",
+      headers: getAuthHeaders(),
     });
     if (!response.ok) {
       console.warn(`[cancelJob] Failed to cancel job ${jobId}: ${response.status}`);
@@ -165,6 +180,7 @@ export async function downloadAsset(
 
   const response = await fetch(`${baseUrl}/assets/${assetId}/file`, {
     method: "GET",
+    headers: getAuthHeaders(),
   });
 
   if (!response.ok) {
