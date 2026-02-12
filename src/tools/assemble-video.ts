@@ -141,7 +141,7 @@ async function assembleWithXfade(
   }
 
   // Build filter chain
-  let cumulativeDuration = 0;
+  let cumulativeDuration = durations[0];
   let previousLabel = "0:v";
 
   for (let i = 1; i < videoPaths.length; i++) {
@@ -151,18 +151,18 @@ async function assembleWithXfade(
     if (transition.type === "cut") {
       // For cuts, just concatenate without xfade
       const nextLabel = `concat${i}`;
-      filterComplex += `${previousLabel}[${i}:v]concat=n=2:v=1:a=0[${nextLabel}];`;
+      filterComplex += `[${previousLabel}][${i}:v]concat=n=2:v=1:a=0[${nextLabel}];`;
       previousLabel = nextLabel;
+      cumulativeDuration += durations[i];
     } else {
       // For transitions, use xfade
       const xfadeType = getXfadeTransitionName(transition.type);
       const offset = cumulativeDuration - transitionDurationSec;
       const xfadeLabel = `xfade${i}`;
-      filterComplex += `${previousLabel}[${i}:v]xfade=transition=${xfadeType}:duration=${transitionDurationSec}:offset=${offset}[${xfadeLabel}];`;
+      filterComplex += `[${previousLabel}][${i}:v]xfade=transition=${xfadeType}:duration=${transitionDurationSec}:offset=${offset}[${xfadeLabel}];`;
       previousLabel = xfadeLabel;
+      cumulativeDuration += durations[i] - transitionDurationSec;
     }
-
-    cumulativeDuration += durations[i - 1];
   }
 
   // Remove trailing semicolon
@@ -172,7 +172,7 @@ async function assembleWithXfade(
   const ffmpegArgs = [
     ...inputs,
     "-filter_complex", filterComplex,
-    "-map", `${previousLabel}`,
+    "-map", `[${previousLabel}]`,
     "-c:v", "libx264",
     "-preset", "medium",
     "-crf", "23",
