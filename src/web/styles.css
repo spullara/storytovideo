@@ -728,6 +728,64 @@ dd {
   background: #000;
 }
 
+/* Shot prompts collapsible */
+.shot-prompts-row td {
+  padding: 0 0.5rem 0.5rem !important;
+  border-bottom: 1px solid var(--border);
+}
+
+.shot-prompts-details {
+  margin: 0;
+}
+
+.shot-prompts-summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  list-style: none;
+  user-select: none;
+}
+
+.shot-prompts-summary::-webkit-details-marker {
+  display: none;
+}
+
+.shot-prompts-details[open] .shot-prompts-summary {
+  margin-bottom: 0.4rem;
+}
+
+.shot-prompts-content {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.4rem 0 0.2rem 0.6rem;
+}
+
+.shot-prompt-field {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.shot-prompt-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.shot-prompt-value {
+  font-size: 0.82rem;
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  color: var(--text);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Lightbox overlay */
 .lightbox-overlay {
   position: fixed;

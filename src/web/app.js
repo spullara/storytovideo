@@ -581,6 +581,32 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
             html += `<td>${dialogue}</td>`;
             html += `</tr>`;
 
+            // Add collapsible prompts row
+            const promptFields = [
+              { label: "Start Frame Prompt", value: shot.startFramePrompt },
+              { label: "End Frame Prompt", value: shot.endFramePrompt },
+              { label: "Action Prompt", value: shot.actionPrompt },
+              { label: "Camera Direction", value: shot.cameraDirection },
+              { label: "Sound Effects", value: shot.soundEffects },
+            ];
+            const hasAnyPrompt = promptFields.some(f => f.value);
+            if (hasAnyPrompt) {
+              html += `<tr class="shot-prompts-row"><td colspan="4">`;
+              html += `<details class="shot-prompts-details">`;
+              html += `<summary class="shot-prompts-summary">Prompts ▸</summary>`;
+              html += `<div class="shot-prompts-content">`;
+              for (const field of promptFields) {
+                const val = field.value ? escapeHtml(field.value) : "—";
+                html += `<div class="shot-prompt-field">`;
+                html += `<span class="shot-prompt-label">${field.label}</span>`;
+                html += `<span class="shot-prompt-value">${val}</span>`;
+                html += `</div>`;
+              }
+              html += `</div>`;
+              html += `</details>`;
+              html += `</td></tr>`;
+            }
+
             // Add shot assets row below the shot
             const startFrameAsset = findAsset(`frame:${shot.shotNumber}:start`);
             const endFrameAsset = findAsset(`frame:${shot.shotNumber}:end`);
