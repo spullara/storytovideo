@@ -179,13 +179,13 @@ async function generateSingleFrame(params: {
     const remixPrompt = imgPrefix + prompt;
 
     return await remixImage(remixPrompt, limitedReferencePaths, {
-      aspectRatio: "16:9",
+      aspectRatio: "1:1",
       outputPath,
     });
   } else {
     // No reference images — use text-to-image generation
     return await createImage(prompt, {
-      aspectRatio: "16:9",
+      aspectRatio: "1:1",
       outputPath,
     });
   }
@@ -230,7 +230,7 @@ Generate a high-quality, cinematic image that:
 6. Maintains visual continuity with reference images provided
 7. CRITICAL: If a reference image of the previous shot's end frame is provided, your start frame must visually match that moment — same characters, positions, lighting, and setting. The camera angle/composition may change, but the scene content must be continuous.
 
-Aspect ratio: 16:9`;
+Aspect ratio: 1:1`;
 }
 
 /**
