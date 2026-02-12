@@ -1,5 +1,5 @@
 import { generateObject } from "ai";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import type { StoryAnalysis, Shot } from "../types";
 
@@ -32,7 +32,7 @@ const sceneShotsSchema = z.object({
 
 /**
  * Plans shots for each scene with cinematic composition and dialogue pacing.
- * Uses Gemini 2.5 Flash with structured output.
+ * Uses Claude Opus 4.6 with structured output.
  */
 export async function planShots(analysis: StoryAnalysis): Promise<StoryAnalysis> {
   const cinematicRules = `
@@ -104,15 +104,9 @@ CROSS-SHOT CONTINUITY:
 
 Return a JSON object with scenes array, where each scene has a transition field and a shots array with all required fields.`;
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is not set");
-  }
-
   try {
-    const google = createGoogleGenerativeAI({ apiKey });
     const { object } = await generateObject({
-      model: google("gemini-2.5-flash"),
+      model: anthropic("claude-opus-4-6"),
       schema: sceneShotsSchema,
       prompt,
     } as any);

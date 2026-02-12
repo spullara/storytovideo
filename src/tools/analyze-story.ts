@@ -1,5 +1,5 @@
 import { generateObject } from "ai";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import type { StoryAnalysis } from "../types";
 
@@ -31,7 +31,7 @@ const storyAnalysisSchema = z.object({
 
 /**
  * Analyzes a story to extract characters, locations, art style, and scenes.
- * Uses Gemini 2.5 Flash with structured output.
+ * Uses Claude Opus 4.6 with structured output.
  */
 export async function analyzeStory(storyText: string): Promise<StoryAnalysis> {
   const prompt = `Analyze the following story and extract:
@@ -49,14 +49,8 @@ Story:
 ${storyText}`;
 
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is not set");
-    }
-
-    const google = createGoogleGenerativeAI({ apiKey });
     const { object } = await generateObject({
-      model: google("gemini-2.5-flash"),
+      model: anthropic("claude-opus-4-6"),
       schema: storyAnalysisSchema,
       prompt,
     } as any);
