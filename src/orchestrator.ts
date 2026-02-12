@@ -37,6 +37,24 @@ const STAGE_ORDER: StageName[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Tool execute wrapper — logs success/failure for debugging
+// ---------------------------------------------------------------------------
+
+function wrapToolExecute<T>(stageName: string, toolName: string, fn: (params: any) => Promise<T>): (params: any) => Promise<T> {
+  return async (params: any) => {
+    try {
+      const result = await fn(params);
+      console.log(`[${stageName}] Tool success (${toolName}): ${JSON.stringify(result)?.substring(0, 200)}`);
+      return result;
+    } catch (error) {
+      console.error(`[${stageName}] Tool FAILED (${toolName}):`, error instanceof Error ? error.message : error);
+      console.error(`[${stageName}] Tool params were:`, JSON.stringify(params)?.substring(0, 500));
+      throw error;
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -176,6 +194,7 @@ async function runStage(
     tools,
     stopWhen: stepCountIs(maxSteps),
     onStepFinish: (step: any) => {
+      console.log(`[${stageName}] Step keys:`, Object.keys(step).join(', '));
       if (step.text) {
         console.log(`[${stageName}] Claude: ${step.text.substring(0, 200)}`);
       }
@@ -233,11 +252,11 @@ After receiving the analysis, respond with a brief summary of what was found.`;
     analyzeStory: {
       description: analyzeStoryTool.description,
       inputSchema: analyzeStoryTool.parameters,
-      execute: async (params: z.infer<typeof analyzeStoryTool.parameters>) => {
+      execute: wrapToolExecute("analysis", "analyzeStory", async (params: z.infer<typeof analyzeStoryTool.parameters>) => {
         const result = await analyzeStory(params.storyText);
         state.storyAnalysis = result;
         return result;
-      },
+      }),
     },
   };
 
@@ -277,11 +296,11 @@ After receiving the shot plan, respond with a brief summary of the shots planned
     planShots: {
       description: planShotsTool.description,
       inputSchema: planShotsTool.parameters,
-      execute: async (params: z.infer<typeof planShotsTool.parameters>) => {
+      execute: wrapToolExecute("shot_planning", "planShots", async (params: z.infer<typeof planShotsTool.parameters>) => {
         const result = await planShots(params.analysis as StoryAnalysis);
         state.storyAnalysis = result;
         return result;
-      },
+      }),
     },
   };
 
@@ -358,7 +377,7 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
     generateAsset: {
       description: generateAssetTool.description,
       inputSchema: generateAssetTool.parameters,
-      execute: async (params: z.infer<typeof generateAssetTool.parameters>) => {
+      execute: wrapToolExecute("asset_generation", "generateAsset", async (params: z.infer<typeof generateAssetTool.parameters>) => {
         const result = await generateAsset({
           ...params,
           dryRun: options.dryRun,
@@ -389,14 +408,14 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
         }
         await saveState({ state });
         return result;
-      },
+      }),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
-      execute: async () => {
+      execute: wrapToolExecute("asset_generation", "saveState", async () => {
         return saveState({ state });
-      },
+      }),
     },
   };
 
@@ -404,9 +423,9 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
     assetTools.verifyOutput = {
       description: verifyOutputTool.description,
       inputSchema: verifyOutputTool.parameters,
-      execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
+      execute: wrapToolExecute("asset_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      },
+      }),
     };
   }
 
@@ -495,7 +514,7 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
     generateFrame: {
       description: generateFrameTool.description,
       inputSchema: generateFrameTool.parameters,
-      execute: async (params: z.infer<typeof generateFrameTool.parameters>) => {
+      execute: wrapToolExecute("frame_generation", "generateFrame", async (params: z.infer<typeof generateFrameTool.parameters>) => {
         const result = await generateFrame({
           shot: params.shot,
           artStyle: params.artStyle,
@@ -515,14 +534,14 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
         };
         await saveState({ state });
         return result;
-      },
+      }),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
-      execute: async () => {
+      execute: wrapToolExecute("frame_generation", "saveState", async () => {
         return saveState({ state });
-      },
+      }),
     },
   };
 
@@ -530,9 +549,9 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
     frameTools.verifyOutput = {
       description: verifyOutputTool.description,
       inputSchema: verifyOutputTool.parameters,
-      execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
+      execute: wrapToolExecute("frame_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      },
+      }),
     };
   }
 
@@ -608,7 +627,7 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
     generateVideo: {
       description: generateVideoTool.description,
       inputSchema: generateVideoTool.parameters,
-      execute: async (params: z.infer<typeof generateVideoTool.parameters>) => {
+      execute: wrapToolExecute("video_generation", "generateVideo", async (params: z.infer<typeof generateVideoTool.parameters>) => {
         const result = await generateVideo({
           ...params,
           dryRun: options.dryRun,
@@ -622,14 +641,14 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
         state.generatedVideos[result.shotNumber] = result.path;
         await saveState({ state });
         return result;
-      },
+      }),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
-      execute: async () => {
+      execute: wrapToolExecute("video_generation", "saveState", async () => {
         return saveState({ state });
-      },
+      }),
     },
   };
 
@@ -637,9 +656,9 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
     videoTools.verifyOutput = {
       description: verifyOutputTool.description,
       inputSchema: verifyOutputTool.parameters,
-      execute: async (params: z.infer<typeof verifyOutputTool.parameters>) => {
+      execute: wrapToolExecute("video_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      },
+      }),
     };
   }
 
@@ -725,19 +744,19 @@ Output directory: "${options.outputDir}"`;
     assembleVideo: {
       description: assembleVideoTool.description,
       inputSchema: assembleVideoTool.parameters,
-      execute: async (params: z.infer<typeof assembleVideoTool.parameters>) => {
+      execute: wrapToolExecute("assembly", "assembleVideo", async (params: z.infer<typeof assembleVideoTool.parameters>) => {
         return assembleVideo({
           ...params,
           dryRun: options.dryRun,
         });
-      },
+      }),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
-      execute: async () => {
+      execute: wrapToolExecute("assembly", "saveState", async () => {
         return saveState({ state });
-      },
+      }),
     },
   };
 
