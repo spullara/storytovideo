@@ -122,7 +122,7 @@ export async function editImage(
   const imageBase64 = loadImageAsBase64(referenceImagePath);
 
   const imageBuffer = await requestWithRetry(`${API_BASE_URL}/image/edit`, {
-    image: imageBase64,
+    reference_image: imageBase64,
     edit_instruction: editInstruction,
     version,
   });
