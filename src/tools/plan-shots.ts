@@ -19,6 +19,7 @@ const shotSchema = z.object({
   cameraDirection: z.string(),
   charactersPresent: z.array(z.string()),
   location: z.string(),
+  continuousFromPrevious: z.boolean(),
 });
 
 const sceneShotsSchema = z.object({
@@ -91,6 +92,15 @@ For each scene:
 6. Write detailed frame prompts that include the composition type
 7. Write action prompts for video generation
 8. Include dialogue as quoted speech if present
+
+CROSS-SHOT CONTINUITY:
+- Set continuousFromPrevious: true when this shot continues directly from the previous shot within the same scene — same location, continuous action, no time skip. The camera angle/composition may change but the scene content is continuous.
+- Set continuousFromPrevious: false when:
+  - It's the first shot of a scene (always false)
+  - There's a time skip from the previous shot
+  - The location changes from the previous shot
+  - The action is not continuous (e.g., reaction shot after a pause)
+- When continuousFromPrevious is true, the system will reuse the previous shot's end frame as this shot's start frame for perfect visual continuity.
 
 Return a JSON object with scenes array, where each scene has a transition field and a shots array with all required fields.`;
 
