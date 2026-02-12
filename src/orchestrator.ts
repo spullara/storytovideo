@@ -467,6 +467,14 @@ async function runFrameGenerationStage(
   const analysis = state.storyAnalysis;
   const allShots = analysis.scenes.flatMap((s) => s.shots || []);
 
+  // Safety guard: first shot of each scene must never be continuousFromPrevious
+  for (const shot of allShots) {
+    if (shot.shotInScene === 1 && shot.continuousFromPrevious) {
+      console.log(`[frame_generation] Safety guard: forcing continuousFromPrevious=false for shot ${shot.shotNumber} (first shot of scene ${shot.sceneNumber})`);
+      shot.continuousFromPrevious = false;
+    }
+  }
+
   // Determine which frames still need generation (all shots use first_last_frame)
   const neededFrames = allShots.filter((s) => {
     const existing = state.generatedFrames[s.shotNumber];
