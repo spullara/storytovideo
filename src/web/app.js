@@ -55,6 +55,9 @@ const elements = {
   eventsList: getElement("events-list"),
   stageOutputSection: getElement("stage-output-section"),
   stageOutput: getElement("stage-output"),
+  lightboxOverlay: getElement("lightbox-overlay"),
+  lightboxImage: getElement("lightbox-image"),
+  lightboxClose: getElement("lightbox-overlay").querySelector(".lightbox-close"),
 };
 
 function getElement(id) {
@@ -132,6 +135,16 @@ function setGlobalError(message) {
   }
   elements.runError.textContent = message;
   elements.runError.classList.remove("hidden");
+}
+
+function openLightbox(src) {
+  elements.lightboxImage.src = src;
+  elements.lightboxOverlay.classList.add("lightbox-visible");
+}
+
+function closeLightbox() {
+  elements.lightboxOverlay.classList.remove("lightbox-visible");
+  elements.lightboxImage.src = "";
 }
 
 function setConnectionStatus(value) {
@@ -1175,6 +1188,34 @@ function bindEvents() {
     disconnectEventStream();
     if (state.pollTimer) {
       clearInterval(state.pollTimer);
+    }
+  });
+
+  // Lightbox: delegated click on thumbnails
+  document.body.addEventListener("click", (event) => {
+    const thumbnail = event.target.closest(".inline-thumbnail");
+    if (thumbnail && thumbnail.src) {
+      openLightbox(thumbnail.src);
+    }
+  });
+
+  // Lightbox: close on × button
+  elements.lightboxClose.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeLightbox();
+  });
+
+  // Lightbox: close on backdrop click (but not on the image itself)
+  elements.lightboxOverlay.addEventListener("click", (event) => {
+    if (event.target === elements.lightboxOverlay) {
+      closeLightbox();
+    }
+  });
+
+  // Lightbox: close on Escape key
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && elements.lightboxOverlay.classList.contains("lightbox-visible")) {
+      closeLightbox();
     }
   });
 }
