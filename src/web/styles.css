@@ -641,6 +641,41 @@ dd {
   gap: 0.4rem;
 }
 
+.shot-asset-redo {
+  justify-content: center;
+}
+
+.redo-item-button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1;
+  background: var(--panel-alt);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.redo-item-button:hover:not(:disabled) {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.redo-item-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .shot-asset-label {
   margin: 0;
   font-size: 0.75rem;

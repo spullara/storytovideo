@@ -614,6 +614,9 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
             const showFrameSpinners = isStageGenerating("frame_generation");
             const showVideoSpinners = isStageGenerating("video_generation");
 
+            const redoItemDisabled = isRunActivelyExecuting(state.activeRun) ? " disabled" : "";
+            const hasFrameAsset = (startFrameAsset && startFrameAsset.previewUrl) || (endFrameAsset && endFrameAsset.previewUrl);
+
             if (startFrameAsset || endFrameAsset || videoAsset || showFrameSpinners || showVideoSpinners) {
               html += `<tr><td colspan="4">`;
               html += `<div class="shot-assets">`;
@@ -639,10 +642,16 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
                 html += `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
                 html += `</div>`;
               }
+              if (hasFrameAsset) {
+                html += `<div class="shot-asset-item shot-asset-redo">`;
+                html += `<button class="redo-item-button" data-redo-type="frame" data-redo-shot="${shot.shotNumber}"${redoItemDisabled} title="Retry frames for shot ${shot.shotNumber}">↻</button>`;
+                html += `</div>`;
+              }
               if (videoAsset && videoAsset.previewUrl) {
                 html += `<div class="shot-asset-item">`;
                 html += `<p class="shot-asset-label">Video</p>`;
                 html += `<video src="${escapeHtml(videoAsset.previewUrl)}" class="inline-video" controls preload="metadata"></video>`;
+                html += `<button class="redo-item-button" data-redo-type="video" data-redo-shot="${shot.shotNumber}"${redoItemDisabled} title="Retry video for shot ${shot.shotNumber}">↻</button>`;
                 html += `</div>`;
               } else if (showVideoSpinners) {
                 html += `<div class="shot-asset-item">`;
@@ -1138,6 +1147,36 @@ async function handleRedoClick(stage) {
   }
 }
 
+async function handleRedoItem(type, shotNumber) {
+  if (!state.activeRunId) {
+    setGlobalError("No active run selected.");
+    return;
+  }
+  if (!state.activeRun) {
+    setGlobalError("No active run data available.");
+    return;
+  }
+
+  try {
+    await requestJson(`/runs/${encodeURIComponent(state.activeRunId)}/redo-item`, {
+      method: "POST",
+      body: JSON.stringify({ type, shotNumber }),
+    });
+    const label = type === "frame" ? "frames" : "video";
+    appendEvent(
+      createEventEntry({
+        title: `Redo ${label}`,
+        message: `Retrying ${label} for shot ${shotNumber}`,
+      }),
+    );
+    setGlobalError("");
+  } catch (error) {
+    setGlobalError(`Failed to redo item: ${error.message}`);
+  } finally {
+    renderRunDetails();
+  }
+}
+
 async function handleStopClick() {
   if (!state.activeRunId) {
     setGlobalError("No active run selected.");
@@ -1242,6 +1281,18 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && elements.lightboxOverlay.classList.contains("lightbox-visible")) {
       closeLightbox();
+    }
+  });
+
+  // Per-item redo: delegated click on retry buttons
+  document.body.addEventListener("click", (event) => {
+    const btn = event.target.closest(".redo-item-button");
+    if (btn && !btn.disabled) {
+      const type = btn.dataset.redoType;
+      const shotNumber = Number(btn.dataset.redoShot);
+      if (type && !Number.isNaN(shotNumber)) {
+        handleRedoItem(type, shotNumber);
+      }
     }
   });
 }
