@@ -210,6 +210,20 @@ export function buildAssetFeed(runId: string, state: PipelineState): AssetFeedIt
     );
   }
 
+  if (state.completedStages.includes("assembly")) {
+    items.push(
+      createAssetFeedItem({
+        runId,
+        outputDir: state.outputDir,
+        id: "final-video",
+        type: "video",
+        key: "final.mp4",
+        path: "final.mp4",
+        fallbackTimestamp,
+      }),
+    );
+  }
+
   items.sort((a, b) => {
     const byTimestamp = a.createdAt.localeCompare(b.createdAt);
     if (byTimestamp !== 0) {

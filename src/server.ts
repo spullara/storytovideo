@@ -632,6 +632,25 @@ function detectStateChanges(runId: string, state: PipelineState, previous: State
     }
   }
 
+  const assemblyNewlyCompleted =
+    current.completedStages.includes("assembly") &&
+    !previous.completedStages.includes("assembly");
+
+  if (assemblyNewlyCompleted) {
+    emitAssetEvent(
+      runId,
+      createAssetFeedItem({
+        runId,
+        outputDir: state.outputDir,
+        id: "final-video",
+        type: "video",
+        key: "final.mp4",
+        path: "final.mp4",
+        fallbackTimestamp,
+      }),
+    );
+  }
+
   if (current.errors.length > previous.errors.length) {
     for (const errorEntry of current.errors.slice(previous.errors.length)) {
       emitLogEvent(
