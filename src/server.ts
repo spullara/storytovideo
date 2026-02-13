@@ -1129,15 +1129,24 @@ async function handleRedoItem(
     return;
   }
 
-  const { type, shotNumber } = body as { type?: string; shotNumber?: number };
+  const { type, shotNumber, assetKey } = body as { type?: string; shotNumber?: number; assetKey?: string };
 
-  if (!type || (type !== "frame" && type !== "video")) {
-    sendJson(res, 400, { error: 'Invalid or missing "type". Must be "frame" or "video".' });
+  const validTypes = ["frame", "video", "asset", "start_frame", "end_frame"];
+  if (!type || !validTypes.includes(type)) {
+    sendJson(res, 400, { error: `Invalid or missing "type". Must be one of: ${validTypes.join(", ")}.` });
     return;
   }
 
-  if (shotNumber === undefined || shotNumber === null || typeof shotNumber !== "number" || !Number.isInteger(shotNumber)) {
+  // shotNumber is required for frame, video, start_frame, end_frame
+  const needsShotNumber = type === "frame" || type === "video" || type === "start_frame" || type === "end_frame";
+  if (needsShotNumber && (shotNumber === undefined || shotNumber === null || typeof shotNumber !== "number" || !Number.isInteger(shotNumber))) {
     sendJson(res, 400, { error: 'Invalid or missing "shotNumber". Must be an integer.' });
+    return;
+  }
+
+  // assetKey is required for asset type
+  if (type === "asset" && (!assetKey || typeof assetKey !== "string")) {
+    sendJson(res, 400, { error: 'Invalid or missing "assetKey". Must be a string (e.g., "character:Lily:front", "location:Forest:front").' });
     return;
   }
 
@@ -1170,33 +1179,99 @@ async function handleRedoItem(
     return;
   }
 
-  // Validate that shotNumber exists in the state
-  const hasFrame = state.generatedFrames[shotNumber] !== undefined;
-  const hasVideo = state.generatedVideos[shotNumber] !== undefined;
-  if (!hasFrame && !hasVideo) {
-    sendJson(res, 400, { error: `Shot ${shotNumber} not found in generated frames or videos` });
-    return;
-  }
-
-  // Per-item deletion based on type
+  // Validate based on type
   let earliestStage: string;
-  if (type === "frame") {
-    // Delete frame and its dependent video
-    delete state.generatedFrames[shotNumber];
-    delete state.generatedVideos[shotNumber];
-    // Remove frame_generation, video_generation, and assembly from completedStages
+
+  if (type === "asset") {
+    // Validate that the assetKey exists in generatedAssets
+    if (!state.generatedAssets[assetKey!]) {
+      sendJson(res, 400, { error: `Asset key "${assetKey}" not found in generatedAssets` });
+      return;
+    }
+
+    // Parse the asset key: "character:Name:front", "character:Name:angle", "location:Name:front"
+    const parts = assetKey!.split(":");
+    const assetType = parts[0]; // "character" or "location"
+    const assetName = parts[1];
+    const angleType = parts[2]; // "front" or "angle"
+
+    if (assetType === "character" && angleType === "front") {
+      // Deleting front → also delete angle (angle is derived from front via image editing)
+      delete state.generatedAssets[assetKey!];
+      const angleKey = `character:${assetName}:angle`;
+      delete state.generatedAssets[angleKey];
+      // Clear entire character from assetLibrary
+      if (state.assetLibrary?.characterImages[assetName]) {
+        delete state.assetLibrary.characterImages[assetName];
+      }
+    } else if (assetType === "character" && angleType === "angle") {
+      // Deleting angle only — keep front
+      delete state.generatedAssets[assetKey!];
+      // Update assetLibrary: clear angle, keep front
+      if (state.assetLibrary?.characterImages[assetName]) {
+        state.assetLibrary.characterImages[assetName].angle = "";
+      }
+    } else if (assetType === "location") {
+      // Delete location asset
+      delete state.generatedAssets[assetKey!];
+      // Clear from assetLibrary
+      if (state.assetLibrary?.locationImages[assetName]) {
+        delete state.assetLibrary.locationImages[assetName];
+      }
+    }
+
+    // Cascade: frames and videos depend on assets
     state.completedStages = state.completedStages.filter(
-      s => s !== "frame_generation" && s !== "video_generation" && s !== "assembly"
+      s => s !== "asset_generation" && s !== "frame_generation" && s !== "video_generation" && s !== "assembly"
     );
-    earliestStage = "frame_generation";
+    earliestStage = "asset_generation";
   } else {
-    // type === "video"
-    delete state.generatedVideos[shotNumber];
-    // Remove video_generation and assembly from completedStages
-    state.completedStages = state.completedStages.filter(
-      s => s !== "video_generation" && s !== "assembly"
-    );
-    earliestStage = "video_generation";
+    // Types that require shotNumber: frame, video, start_frame, end_frame
+    // Validate that shotNumber exists in the state
+    const hasFrame = state.generatedFrames[shotNumber!] !== undefined;
+    const hasVideo = state.generatedVideos[shotNumber!] !== undefined;
+    if (!hasFrame && !hasVideo) {
+      sendJson(res, 400, { error: `Shot ${shotNumber} not found in generated frames or videos` });
+      return;
+    }
+
+    if (type === "frame") {
+      // Delete frame and its dependent video
+      delete state.generatedFrames[shotNumber!];
+      delete state.generatedVideos[shotNumber!];
+      state.completedStages = state.completedStages.filter(
+        s => s !== "frame_generation" && s !== "video_generation" && s !== "assembly"
+      );
+      earliestStage = "frame_generation";
+    } else if (type === "start_frame") {
+      // Delete start frame → also cascade to end frame (end uses start as reference) and video
+      if (state.generatedFrames[shotNumber!]) {
+        state.generatedFrames[shotNumber!].start = undefined;
+        state.generatedFrames[shotNumber!].end = undefined;
+      }
+      delete state.generatedVideos[shotNumber!];
+      state.completedStages = state.completedStages.filter(
+        s => s !== "frame_generation" && s !== "video_generation" && s !== "assembly"
+      );
+      earliestStage = "frame_generation";
+    } else if (type === "end_frame") {
+      // Delete end frame only → cascade to video
+      if (state.generatedFrames[shotNumber!]) {
+        state.generatedFrames[shotNumber!].end = undefined;
+      }
+      delete state.generatedVideos[shotNumber!];
+      state.completedStages = state.completedStages.filter(
+        s => s !== "frame_generation" && s !== "video_generation" && s !== "assembly"
+      );
+      earliestStage = "frame_generation";
+    } else {
+      // type === "video"
+      delete state.generatedVideos[shotNumber!];
+      state.completedStages = state.completedStages.filter(
+        s => s !== "video_generation" && s !== "assembly"
+      );
+      earliestStage = "video_generation";
+    }
   }
 
   // Set currentStage to the earliest cleared stage
@@ -1205,7 +1280,8 @@ async function handleRedoItem(
   // Save the cleared state
   await saveState({ state });
 
-  console.log(`[handleRedoItem] Cleared ${type} for shot ${shotNumber}. currentStage=${earliestStage}, completedStages=[${state.completedStages.join(', ')}]`);
+  const itemLabel = type === "asset" ? `asset ${assetKey}` : `${type} for shot ${shotNumber}`;
+  console.log(`[handleRedoItem] Cleared ${itemLabel}. currentStage=${earliestStage}, completedStages=[${state.completedStages.join(', ')}]`);
 
   // Update run record
   const updatedRecord = runStore.patch(runId, {
@@ -1218,14 +1294,14 @@ async function handleRedoItem(
 
   // Emit events
   emitRunStatusEvent(runId, "queued");
-  emitLogEvent(runId, `Redoing ${type} for shot ${shotNumber}`);
+  emitLogEvent(runId, `Redoing ${itemLabel}`);
   startRunStateMonitor(runId);
   console.log('[handleRedoItem] Starting new pipeline for ' + runId + ' from stage ' + earliestStage);
   setImmediate(() => {
     void runInBackground(runId, true);
   });
 
-  sendJson(res, 200, { run: toRunResponse(updatedRecord), type, shotNumber });
+  sendJson(res, 200, { run: toRunResponse(updatedRecord), type, ...(shotNumber !== undefined && { shotNumber }), ...(assetKey !== undefined && { assetKey }) });
 }
 
 async function handleStopRun(
