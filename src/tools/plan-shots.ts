@@ -6,34 +6,39 @@ import type { StoryAnalysis, Shot } from "../types";
 // ---------------------------------------------------------------------------
 
 export const CINEMATIC_RULES = `
-CINEMATIC COMPOSITION RULES:
+FRAME INTERPOLATION CONSTRAINTS:
+Each shot generates a START frame and an END frame. A video model then interpolates between them.
+- The start and end frames MUST show the SAME scene from the SAME camera angle and composition.
+- Only small, interpolatable changes between frames: character movement within frame, entering/leaving frame, gestures, facial expressions.
+- Characters visible in the start frame must remain visible in the end frame (unless specifically exiting the frame).
+- New characters may enter the frame between start and end.
+- If you need a different camera angle or different character focus, that is a NEW SHOT (cut to it).
+- Radically different start and end frames produce bad video — keep changes subtle.
 
-Dialogue Scenes:
-- over_the_shoulder: Camera behind speaker A's shoulder, focused on speaker B's face. Alternate between speakers.
-- shot_reverse_shot: Cut between close-ups of each speaker.
-- two_shot: Both characters in frame, medium shot. Establishes the conversation.
-- close_up: Tight on face during emotional beats.
-- insert_cutaway: Close-up of hand gesture, object, or detail.
+COMPOSITION TYPES (start/end frame differences):
+- wide_establishing: Static wide shot. Start: empty scene or characters entering. End: characters in position. Small motion only.
+- over_the_shoulder: Camera locked behind one character's shoulder. Start/end show the SAME framing. Subject speaks or reacts — only expression and small gestures change.
+- two_shot: Both characters in frame throughout. Start/end differ only in body language, gestures, expressions.
+- close_up: Tight on one face throughout. Start/end differ only in facial expression.
+- medium_shot: Waist-up framing stays consistent. Character gestures or shifts weight between start and end.
+- tracking: Camera follows subject. Start: subject at position A. End: subject at position B. Same background/environment visible throughout.
+- pov: What a character sees. Start/end show the same view with small changes (hand reaches for object, door opens, etc.).
+- insert_cutaway: Close detail shot. Start/end show the same object with a small change (hand picks it up, liquid pours, etc.).
+- low_angle: Fixed dramatic low angle. Same framing rules as medium_shot — only gestures/expressions change.
+- high_angle: Fixed dramatic high angle. Same framing rules as medium_shot — only gestures/expressions change.
 
-Action/Establishing Scenes:
-- wide_establishing: Full location, characters small. First shot of new location.
-- medium_shot: Waist up, action with body language.
-- tracking: Camera follows movement. Use first_last_frame with start/end keyframes showing the movement arc.
-- low_angle / high_angle: Power dynamics, drama.
-- pov: Camera sees what character sees.
-
-Typical dialogue scene pattern (2 characters, ~24s):
-1. Wide two-shot establishing (8s) - both characters, location visible
-2. OTS on character A speaking (8s) - over B's shoulder
-3. OTS on character B responding (8s) - over A's shoulder
-4. Close-up reaction of A (4-6s) - emotional beat
+Typical dialogue scene pattern (2 characters, ~26s):
+1. Wide two-shot establishing (8s) — both characters visible. Start: standing apart. End: facing each other.
+2. Close-up on Character A (6s) — A speaks. Only expression/mouth changes between start and end.
+3. Close-up on Character B (6s) — B reacts. Only expression changes between start and end.
+4. OTS on A from behind B's shoulder (6s) — A continues speaking, small gesture between start and end.
 
 DIALOGUE PACING:
 - ~2.5 words/second in film
 - 8s clip: ~15-20 words
 - 6s clip: ~10-12 words
 - 4s clip: ~6-8 words
-- Not every shot needs dialogue - silence and reactions are valid
+- Not every shot needs dialogue — silence and reactions are valid
 
 SCENE TRANSITIONS:
 - Scene 1 always uses "cut" (no transition before the first scene)

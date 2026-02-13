@@ -306,6 +306,7 @@ For each scene:
 6. Write detailed frame prompts that include the composition type
 7. Write action prompts for video generation
 8. Include dialogue as quoted speech if present
+9. Ensure start and end frame prompts describe the SAME scene, camera angle, and characters — only small motion changes between them. The video model interpolates between two similar images; radically different frames produce bad results.
 
 After planning all scenes, respond with a brief summary of the shots planned.`;
 
