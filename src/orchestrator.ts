@@ -805,6 +805,7 @@ Output directory: "${options.outputDir}"`;
       execute: wrapToolExecute("assembly", "assembleVideo", async (params: z.infer<typeof assembleVideoTool.parameters>) => {
         return assembleVideo({
           ...params,
+          subtitles,
           dryRun: options.dryRun,
         });
       }),
