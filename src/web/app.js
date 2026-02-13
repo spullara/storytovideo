@@ -509,6 +509,7 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
         let imagesHtml = "";
         const showCharacterSpinners = isStageGenerating("asset_generation");
 
+        const charRedoItemDisabled = isRunActivelyExecuting(state.activeRun) ? " disabled" : "";
         if (frontAsset || angleAsset || showCharacterSpinners) {
           imagesHtml += `<div class="character-images">`;
           if (frontAsset && frontAsset.previewUrl) {
@@ -520,6 +521,9 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
             imagesHtml += `<img src="${escapeHtml(angleAsset.previewUrl)}" alt="Angle" class="inline-thumbnail" />`;
           } else if (showCharacterSpinners) {
             imagesHtml += `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
+          }
+          if ((frontAsset && frontAsset.previewUrl) || (angleAsset && angleAsset.previewUrl)) {
+            imagesHtml += `<button class="redo-item-button" data-redo-type="asset" data-redo-asset-key="character:${escapeHtml(char.name)}:front"${charRedoItemDisabled} title="Retry images for ${escapeHtml(char.name)}">↻</button>`;
           }
           imagesHtml += `</div>`;
         }
@@ -544,9 +548,11 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
 
         // Look up location image
         const locAsset = findAsset(`location:${loc.name}:front`);
+        const locRedoItemDisabled = isRunActivelyExecuting(state.activeRun) ? " disabled" : "";
         let locImageHtml = "";
         if (locAsset && locAsset.previewUrl) {
           locImageHtml = `<img src="${escapeHtml(locAsset.previewUrl)}" alt="Location" class="inline-thumbnail" />`;
+          locImageHtml += `<button class="redo-item-button" data-redo-type="asset" data-redo-asset-key="location:${escapeHtml(loc.name)}:front"${locRedoItemDisabled} title="Retry image for ${escapeHtml(loc.name)}">↻</button>`;
         } else if (isStageGenerating("asset_generation")) {
           locImageHtml = `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
         }
@@ -615,7 +621,6 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
             const showVideoSpinners = isStageGenerating("video_generation");
 
             const redoItemDisabled = isRunActivelyExecuting(state.activeRun) ? " disabled" : "";
-            const hasFrameAsset = (startFrameAsset && startFrameAsset.previewUrl) || (endFrameAsset && endFrameAsset.previewUrl);
 
             if (startFrameAsset || endFrameAsset || videoAsset || showFrameSpinners || showVideoSpinners) {
               html += `<tr><td colspan="4">`;
@@ -624,6 +629,7 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
                 html += `<div class="shot-asset-item">`;
                 html += `<p class="shot-asset-label">Start Frame</p>`;
                 html += `<img src="${escapeHtml(startFrameAsset.previewUrl)}" alt="Start Frame" class="inline-thumbnail" />`;
+                html += `<button class="redo-item-button" data-redo-type="start_frame" data-redo-shot="${shot.shotNumber}"${redoItemDisabled} title="Retry start frame for shot ${shot.shotNumber}">↻</button>`;
                 html += `</div>`;
               } else if (showFrameSpinners) {
                 html += `<div class="shot-asset-item">`;
@@ -635,16 +641,12 @@ async function fetchAndRenderStageOutput({ silent = false } = {}) {
                 html += `<div class="shot-asset-item">`;
                 html += `<p class="shot-asset-label">End Frame</p>`;
                 html += `<img src="${escapeHtml(endFrameAsset.previewUrl)}" alt="End Frame" class="inline-thumbnail" />`;
+                html += `<button class="redo-item-button" data-redo-type="end_frame" data-redo-shot="${shot.shotNumber}"${redoItemDisabled} title="Retry end frame for shot ${shot.shotNumber}">↻</button>`;
                 html += `</div>`;
               } else if (showFrameSpinners) {
                 html += `<div class="shot-asset-item">`;
                 html += `<p class="shot-asset-label">End Frame</p>`;
                 html += `<div class="spinner-placeholder spinner-image"><div class="spinner-circle"></div><div class="spinner-label">Generating…</div></div>`;
-                html += `</div>`;
-              }
-              if (hasFrameAsset) {
-                html += `<div class="shot-asset-item shot-asset-redo">`;
-                html += `<button class="redo-item-button" data-redo-type="frame" data-redo-shot="${shot.shotNumber}"${redoItemDisabled} title="Retry frames for shot ${shot.shotNumber}">↻</button>`;
                 html += `</div>`;
               }
               if (videoAsset && videoAsset.previewUrl) {
@@ -1147,7 +1149,7 @@ async function handleRedoClick(stage) {
   }
 }
 
-async function handleRedoItem(type, shotNumber) {
+async function handleRedoItem(type, shotNumber, assetKey) {
   if (!state.activeRunId) {
     setGlobalError("No active run selected.");
     return;
@@ -1158,15 +1160,21 @@ async function handleRedoItem(type, shotNumber) {
   }
 
   try {
+    const body = type === "asset" ? { type, assetKey } : { type, shotNumber };
     await requestJson(`/runs/${encodeURIComponent(state.activeRunId)}/redo-item`, {
       method: "POST",
-      body: JSON.stringify({ type, shotNumber }),
+      body: JSON.stringify(body),
     });
-    const label = type === "frame" ? "frames" : "video";
+    const labelMap = { start_frame: "start frame", end_frame: "end frame", video: "video", asset: "asset" };
+    const label = labelMap[type] || type;
+    const message =
+      type === "asset"
+        ? `Retrying asset: ${assetKey}`
+        : `Retrying ${label} for shot ${shotNumber}`;
     appendEvent(
       createEventEntry({
         title: `Redo ${label}`,
-        message: `Retrying ${label} for shot ${shotNumber}`,
+        message,
       }),
     );
     setGlobalError("");
@@ -1289,9 +1297,16 @@ function bindEvents() {
     const btn = event.target.closest(".redo-item-button");
     if (btn && !btn.disabled) {
       const type = btn.dataset.redoType;
-      const shotNumber = Number(btn.dataset.redoShot);
-      if (type && !Number.isNaN(shotNumber)) {
-        handleRedoItem(type, shotNumber);
+      if (type === "asset") {
+        const assetKey = btn.dataset.redoAssetKey;
+        if (assetKey) {
+          handleRedoItem(type, undefined, assetKey);
+        }
+      } else {
+        const shotNumber = Number(btn.dataset.redoShot);
+        if (type && !Number.isNaN(shotNumber)) {
+          handleRedoItem(type, shotNumber);
+        }
       }
     }
   });
