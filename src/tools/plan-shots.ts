@@ -37,11 +37,9 @@ DIALOGUE PACING:
 
 SCENE TRANSITIONS:
 - Scene 1 always uses "cut" (no transition before the first scene)
-- "fade_black" for dramatic mood shifts or time jumps
-- "cross_dissolve" for gentle time passing or location changes
-- "fade_white" for dreamy, emotional, or transcendent moments
-- "wipe_left" sparingly for dramatic reveals
-- Keep transitions SHORT (0.5-1 second) — they shouldn't distract
+- "cut" for immediate cuts between scenes (default, most common)
+- "fade_black" for dramatic mood shifts, time jumps, or emotional beats — quick fade out to black then fade in
+- Keep transitions SHORT (0.5-0.75 second) — they shouldn't distract
 
 CROSS-SHOT CONTINUITY:
 - Set continuousFromPrevious: true when this shot continues directly from the previous shot within the same scene — same location, continuous action, no time skip. The camera angle/composition may change but the scene content is continuous.
@@ -81,7 +79,7 @@ export const planShotsForSceneTool = {
   description: "Save the planned shots for a single scene. Call once per scene, in order.",
   parameters: z.object({
     sceneNumber: z.number(),
-    transition: z.enum(["cut", "fade_black", "cross_dissolve", "fade_white", "wipe_left"]),
+    transition: z.enum(["cut", "fade_black"]),
     shots: z.array(perSceneShotSchema),
   }),
 };
@@ -96,7 +94,7 @@ export const planShotsForSceneTool = {
  */
 export function planShotsForScene(
   sceneNumber: number,
-  transition: "cut" | "fade_black" | "cross_dissolve" | "fade_white" | "wipe_left",
+  transition: "cut" | "fade_black",
   shots: z.infer<typeof planShotsForSceneTool.parameters>["shots"],
   analysis: StoryAnalysis,
 ): StoryAnalysis {

@@ -30,11 +30,8 @@ async function getVideoDuration(videoPath: string): Promise<number> {
 function getXfadeTransitionName(transitionType: string): string {
   const mapping: Record<string, string> = {
     "fade_black": "fadeblack",
-    "cross_dissolve": "dissolve",
-    "fade_white": "fadewhite",
-    "wipe_left": "wipeleft",
   };
-  return mapping[transitionType] || "dissolve";
+  return mapping[transitionType] || "fadeblack";
 }
 
 /**
@@ -44,7 +41,7 @@ function getXfadeTransitionName(transitionType: string): string {
  */
 export async function assembleVideo(params: {
   videoPaths: string[];
-  transitions?: Array<{ type: "cut" | "fade_black" | "cross_dissolve" | "fade_white" | "wipe_left"; durationMs: number }>;
+  transitions?: Array<{ type: "cut" | "fade_black"; durationMs: number }>;
   outputDir: string;
   outputFile?: string;
   dryRun?: boolean;
@@ -195,7 +192,7 @@ export const assembleVideoTool = {
   parameters: z.object({
     videoPaths: z.array(z.string()).describe("Ordered list of video clip paths"),
     transitions: z.array(z.object({
-      type: z.enum(["cut", "fade_black", "cross_dissolve", "fade_white", "wipe_left"]).describe("Transition type"),
+      type: z.enum(["cut", "fade_black"]).describe("Transition type"),
       durationMs: z.number().describe("Transition duration in milliseconds (typically 500-1000)")
     })).optional().describe("One transition per scene boundary. If omitted, all cuts."),
     outputDir: z.string().describe("Output directory for the final video"),

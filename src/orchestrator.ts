@@ -734,7 +734,7 @@ async function runAssemblyStage(
 
   // Build transitions array: one per scene boundary
   // transitions[i] is the transition BEFORE the first video of scene i+2
-  const transitions: Array<{ type: "cut" | "fade_black" | "cross_dissolve" | "fade_white" | "wipe_left"; durationMs: number }> = [];
+  const transitions: Array<{ type: "cut" | "fade_black"; durationMs: number }> = [];
 
   for (let i = 0; i < sortedShots.length - 1; i++) {
     const currentShot = sortedShots[i];
@@ -746,7 +746,7 @@ async function runAssemblyStage(
       const nextSceneTransition = sceneTransitions[nextShot.sceneNumber] || "cut";
       const durationMs = nextSceneTransition === "fade_black" ? 750 : 500;
       transitions.push({
-        type: nextSceneTransition as "cut" | "fade_black" | "cross_dissolve" | "fade_white" | "wipe_left",
+        type: nextSceneTransition as "cut" | "fade_black",
         durationMs,
       });
     }
