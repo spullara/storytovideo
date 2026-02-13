@@ -35,13 +35,94 @@ function getXfadeTransitionName(transitionType: string): string {
 }
 
 /**
+ * Format seconds to ASS timestamp format: H:MM:SS.CC (centiseconds).
+ */
+function formatAssTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const wholeSec = Math.floor(s);
+  const centiseconds = Math.round((s - wholeSec) * 100);
+  return `${h}:${String(m).padStart(2, "0")}:${String(wholeSec).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}`;
+}
+
+/**
+ * Generate an ASS subtitle file from subtitle entries.
+ * Styling: white text, black outline (2px), bottom-center, ~32px font, semi-transparent black background.
+ */
+function generateAssFile(
+  subtitles: Array<{ startSec: number; endSec: number; text: string }>,
+  outputPath: string,
+): string {
+  const assContent = `[Script Info]
+Title: Story Subtitles
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,32,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,2,0,2,20,20,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+${subtitles.map((sub) => {
+    // Escape special ASS characters: braces (override tag delimiters) and line breaks
+    const escapedText = sub.text
+      .replace(/\{/g, "\\{")
+      .replace(/\}/g, "\\}")
+      .replace(/\n/g, "\\N");
+    return `Dialogue: 0,${formatAssTime(sub.startSec)},${formatAssTime(sub.endSec)},Default,,0,0,0,,${escapedText}`;
+  }).join("\n")}
+`;
+
+  fs.writeFileSync(outputPath, assContent);
+  return outputPath;
+}
+
+/**
+ * Burn ASS subtitles into a video file using ffmpeg's ass filter.
+ * Replaces the input file with the subtitled version.
+ */
+async function burnSubtitles(videoPath: string, assPath: string): Promise<void> {
+  const dir = path.dirname(videoPath);
+  const ext = path.extname(videoPath);
+  const base = path.basename(videoPath, ext);
+  const tempPath = path.join(dir, `${base}_subtitled${ext}`);
+
+  // Escape special characters in the ASS path for ffmpeg filter
+  // ffmpeg filter syntax requires escaping colons, backslashes, and single quotes
+  const escapedAssPath = assPath
+    .replace(/\\/g, "\\\\\\\\")
+    .replace(/:/g, "\\\\:")
+    .replace(/'/g, "'\\\\''");
+
+  await execFileAsync("ffmpeg", [
+    "-i", videoPath,
+    "-vf", `ass='${escapedAssPath}'`,
+    "-c:v", "libx264",
+    "-preset", "medium",
+    "-crf", "23",
+    "-c:a", "copy",
+    "-y",
+    tempPath,
+  ]);
+
+  // Replace original with subtitled version
+  fs.renameSync(tempPath, videoPath);
+}
+
+/**
  * Assembles multiple video clips into a single final video with optional scene transitions.
  * Uses ffmpeg xfade filter for transitions, or concat demuxer for all-cut videos.
+ * Optionally burns ASS subtitles into the final video.
  * Returns the path to the final assembled video.
  */
 export async function assembleVideo(params: {
   videoPaths: string[];
   transitions?: Array<{ type: "cut" | "fade_black"; durationMs: number }>;
+  subtitles?: Array<{ startSec: number; endSec: number; text: string }>;
   outputDir: string;
   outputFile?: string;
   dryRun?: boolean;
@@ -49,6 +130,7 @@ export async function assembleVideo(params: {
   const {
     videoPaths,
     transitions = [],
+    subtitles = [],
     outputDir,
     outputFile = "final.mp4",
     dryRun = false,
@@ -62,6 +144,11 @@ export async function assembleVideo(params: {
   if (dryRun) {
     const mockPath = path.join(outputDir, outputFile);
     console.log(`[dry-run] Would assemble ${videoPaths.length} videos into ${mockPath}`);
+    if (subtitles.length > 0) {
+      const assPath = path.join(outputDir, "subtitles.ass");
+      generateAssFile(subtitles, assPath);
+      console.log(`[dry-run] Generated subtitle file: ${assPath} (${subtitles.length} entries)`);
+    }
     return { path: mockPath };
   }
 
@@ -73,13 +160,25 @@ export async function assembleVideo(params: {
   // Check if all transitions are "cut" (no xfade needed)
   const hasTransitions = transitions.length > 0 && transitions.some(t => t.type !== "cut");
 
+  let result: { path: string };
   if (!hasTransitions) {
     // Use fast concat demuxer for all-cut videos
-    return assembleWithConcat(videoPaths, outputPath);
+    result = await assembleWithConcat(videoPaths, outputPath);
+  } else {
+    // Use xfade filter for videos with transitions
+    result = await assembleWithXfade(videoPaths, transitions, outputPath);
   }
 
-  // Use xfade filter for videos with transitions
-  return assembleWithXfade(videoPaths, transitions, outputPath);
+  // Burn subtitles if provided
+  if (subtitles.length > 0) {
+    const assPath = path.join(outputDir, "subtitles.ass");
+    generateAssFile(subtitles, assPath);
+    console.log(`[assembly] Generated subtitle file: ${assPath} (${subtitles.length} entries)`);
+    await burnSubtitles(result.path, assPath);
+    console.log(`[assembly] Burned subtitles into ${result.path}`);
+  }
+
+  return result;
 }
 
 /**
@@ -188,13 +287,18 @@ async function assembleWithXfade(
  * Claude calls this to assemble the final video from all shot clips.
  */
 export const assembleVideoTool = {
-  description: "Assemble multiple video clips into a single final video with optional scene transitions (fade, dissolve, etc.)",
+  description: "Assemble multiple video clips into a single final video with optional scene transitions and burned-in subtitles.",
   parameters: z.object({
     videoPaths: z.array(z.string()).describe("Ordered list of video clip paths"),
     transitions: z.array(z.object({
       type: z.enum(["cut", "fade_black"]).describe("Transition type"),
       durationMs: z.number().describe("Transition duration in milliseconds (typically 500-1000)")
     })).optional().describe("One transition per scene boundary. If omitted, all cuts."),
+    subtitles: z.array(z.object({
+      startSec: z.number().describe("Start time in seconds"),
+      endSec: z.number().describe("End time in seconds"),
+      text: z.string().describe("Subtitle text to display"),
+    })).optional().describe("Subtitle entries to burn into the video. Each entry has start/end times and text."),
     outputDir: z.string().describe("Output directory for the final video"),
     outputFile: z.string().optional().describe("Output filename (default: final.mp4)"),
     dryRun: z.boolean().optional().describe("If true, return placeholder path without calling ffmpeg"),

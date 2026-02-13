@@ -752,18 +752,51 @@ async function runAssemblyStage(
     }
   }
 
+  // Compute subtitle timing from sorted shots' cumulative durations
+  // Account for xfade transition overlaps at scene boundaries
+  const subtitles: Array<{ startSec: number; endSec: number; text: string }> = [];
+  let cumulativeTime = 0;
+  let prevSceneNumber: number | undefined;
+  for (const shot of sortedShots) {
+    // Only include shots that have a generated video
+    if (!state.generatedVideos[shot.shotNumber]) {
+      continue;
+    }
+    // Subtract xfade overlap when crossing a scene boundary
+    if (prevSceneNumber !== undefined && shot.sceneNumber !== prevSceneNumber) {
+      const trans = sceneTransitions[shot.sceneNumber] || "cut";
+      if (trans === "fade_black") {
+        cumulativeTime -= 0.75; // 750ms overlap
+      }
+    }
+    prevSceneNumber = shot.sceneNumber;
+    const duration = shot.durationSeconds;
+    if (shot.dialogue && shot.dialogue.trim().length > 0) {
+      subtitles.push({
+        startSec: cumulativeTime,
+        endSec: cumulativeTime + duration,
+        text: shot.dialogue.trim(),
+      });
+    }
+    cumulativeTime += duration;
+  }
+
+  const subtitleInfo = subtitles.length > 0
+    ? `\nSubtitles (${subtitles.length} dialogue entries): ${JSON.stringify(subtitles)}`
+    : "\nNo dialogue subtitles to burn.";
+
   const systemPrompt = `You are a video assembly agent. Assemble all generated video clips into a single final video with scene transitions.
 
 Scene transitions from the shot plan:
 ${JSON.stringify(state.storyAnalysis.scenes.map(s => ({ scene: s.sceneNumber, transition: s.transition || "cut" })))}
 
-Call assembleVideo with the ordered list of video paths and the transitions array. Then call saveState to checkpoint.
+Call assembleVideo with the ordered list of video paths, transitions array, and subtitles. Then call saveState to checkpoint.
 
 Video paths (in order): ${JSON.stringify(videoPaths)}
-Transitions (one per scene boundary): ${JSON.stringify(transitions)}
+Transitions (one per scene boundary): ${JSON.stringify(transitions)}${subtitleInfo}
 Output directory: "${options.outputDir}"`;
 
-  const userPrompt = `Assemble ${videoPaths.length} video clips into the final video with ${transitions.length} scene transitions.`;
+  const userPrompt = `Assemble ${videoPaths.length} video clips into the final video with ${transitions.length} scene transitions and ${subtitles.length} subtitle entries.`;
 
   const assemblyTools = {
     assembleVideo: {
