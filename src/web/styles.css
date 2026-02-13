@@ -502,6 +502,11 @@ dd {
   color: #4c5665;
 }
 
+.status-stopped {
+  background: #fff3e0;
+  color: #e65100;
+}
+
 .error {
   color: var(--danger);
   margin: 0.35rem 0 0;

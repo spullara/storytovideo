@@ -329,6 +329,12 @@ function renderRunDetails() {
       "Run failed. Use Retry to resume from last checkpoint.",
       "locked",
     );
+  } else if (run.status === "stopped") {
+    elements.retryButton.disabled = false;
+    setReviewLockMessage(
+      "Run was stopped. Use Retry to resume from last checkpoint.",
+      "locked",
+    );
   } else if (reviewSafe) {
     elements.retryButton.disabled = true;
     if (continueRequested) {

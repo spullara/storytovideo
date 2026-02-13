@@ -33,7 +33,7 @@ import type { PipelineOptions, PipelineState } from "./types";
 
 const STATE_POLL_INTERVAL_MS = 750;
 
-type RunStatus = "queued" | "running" | "awaiting_review" | "completed" | "failed";
+type RunStatus = "queued" | "running" | "awaiting_review" | "completed" | "failed" | "stopped";
 
 interface RunRecord {
   id: string;
@@ -1334,11 +1334,19 @@ async function handleStopRun(
   if (result === 'timeout') {
     console.warn('[handleStopRun] Pipeline for ' + runId + ' did not stop within 30s, force-removing');
     runningPipelines.delete(runId);
+    stopRunStateMonitor(runId);
     setTimeout(() => setInterrupted(false), 5_000);
   } else {
     console.log('[handleStopRun] Pipeline for ' + runId + ' stopped successfully');
     setInterrupted(false);
   }
+
+  runStore.patch(runId, {
+    status: "stopped" as RunStatus,
+    completedAt: new Date().toISOString(),
+  });
+  emitRunStatusEvent(runId, "stopped");
+  emitLogEvent(runId, "Pipeline stopped by user");
 
   sendJson(res, 200, { message: "Pipeline stopped" });
 }
