@@ -1197,28 +1197,34 @@ async function handleRedoItem(type, shotNumber, assetKey) {
   }
 }
 
-async function handleStopClick() {
+function handleStopClick() {
   if (!state.activeRunId) {
     setGlobalError("No active run selected.");
     return;
   }
-  try {
-    await requestJson(`/runs/${encodeURIComponent(state.activeRunId)}/stop`, {
-      method: "POST",
-      body: "{}",
-    });
-    appendEvent(
-      createEventEntry({
-        title: "Stop pipeline",
-        message: "Pipeline stop requested",
-      }),
-    );
-    setGlobalError("");
-  } catch (error) {
-    setGlobalError(`Failed to stop pipeline: ${error.message}`);
-  } finally {
-    renderRunDetails();
+
+  // Optimistically update UI immediately
+  if (state.activeRun) {
+    state.activeRun.status = "stopped";
   }
+  appendEvent(
+    createEventEntry({
+      title: "Stop pipeline",
+      message: "Pipeline stop requested",
+    }),
+  );
+  setGlobalError("");
+  renderRunDetails();
+  renderStageProgress();
+
+  // Fire the stop request without blocking the UI
+  requestJson(`/runs/${encodeURIComponent(state.activeRunId)}/stop`, {
+    method: "POST",
+    body: "{}",
+  }).catch(() => {
+    // Fetch failed — refresh to get the real state from the backend
+    void refreshRun();
+  });
 }
 
 
