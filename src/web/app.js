@@ -282,6 +282,8 @@ function renderRunDetails() {
     elements.reviewAwaiting.textContent = "no";
     elements.reviewContinueState.textContent = "no";
     elements.reviewPendingCount.textContent = "0";
+    elements.reviewModeCheckbox.checked = false;
+    elements.reviewModeCheckbox.disabled = true;
     elements.submitInstructionButton.disabled = true;
     elements.instructionText.disabled = true;
     elements.instructionStage.disabled = true;
@@ -291,6 +293,9 @@ function renderRunDetails() {
     renderStageProgress();
     return;
   }
+
+  elements.reviewModeCheckbox.checked = Boolean(run.options?.reviewMode);
+  elements.reviewModeCheckbox.disabled = false;
 
   renderStatusBadge(run.status);
   elements.runId.textContent = run.id;
@@ -941,7 +946,7 @@ async function handleCreateRunSubmit(event) {
       body: JSON.stringify({
         storyText,
         options: {
-          reviewMode: elements.reviewModeCheckbox.checked,
+          reviewMode: false,
         },
       }),
     });
@@ -1256,6 +1261,20 @@ function bindEvents() {
 
   elements.retryButton.addEventListener("click", () => {
     void handleRetryClick();
+  });
+
+  elements.reviewModeCheckbox.addEventListener("change", async () => {
+    if (!state.activeRunId) return;
+    try {
+      await requestJson(`/runs/${encodeURIComponent(state.activeRunId)}/review-mode`, {
+        method: "POST",
+        body: JSON.stringify({ reviewMode: elements.reviewModeCheckbox.checked }),
+      });
+    } catch (error) {
+      setGlobalError(`Failed to update review mode: ${error.message}`);
+      // Revert checkbox on failure
+      elements.reviewModeCheckbox.checked = !elements.reviewModeCheckbox.checked;
+    }
   });
 
   window.addEventListener("beforeunload", () => {

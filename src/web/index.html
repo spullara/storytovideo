@@ -45,6 +45,10 @@
 
       <section class="card">
         <h2>Review Controls</h2>
+        <label class="checkbox-label">
+          <input type="checkbox" id="review-mode-checkbox" />
+          Stop for review between stages
+        </label>
         <dl class="review-meta">
           <div><dt>Awaiting review</dt><dd id="review-awaiting">no</dd></div>
           <div><dt>Continue requested</dt><dd id="review-continue-state">no</dd></div>
@@ -101,10 +105,6 @@
               placeholder="Paste a short story here..."
               required
             ></textarea>
-            <label class="checkbox-label">
-              <input type="checkbox" id="review-mode-checkbox" name="reviewMode" />
-              Stop for review between stages
-            </label>
             <button id="create-run-button" type="submit">Start run</button>
           </form>
         </div>

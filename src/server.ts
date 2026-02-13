@@ -901,11 +901,6 @@ async function handleSubmitInstruction(
     return;
   }
 
-  if (!run.options.reviewMode) {
-    sendJson(res, 409, { error: "Run is not configured for review mode" });
-    return;
-  }
-
   if (isRunActivelyExecuting(run.status)) {
     sendRunMutationLockedResponse(res, run);
     return;
@@ -1348,8 +1343,7 @@ async function handleStopRun(
   sendJson(res, 200, { message: "Pipeline stopped" });
 }
 
-
-async function handleContinueRun(
+async function handleSetReviewMode(
   req: IncomingMessage,
   res: ServerResponse,
   runId: string,
@@ -1360,8 +1354,26 @@ async function handleContinueRun(
     return;
   }
 
-  if (!run.options.reviewMode) {
-    sendJson(res, 409, { error: "Run is not configured for review mode" });
+  const body = await readJsonBody(req);
+  const reviewMode = parseBoolean(
+    (body as Record<string, unknown> | null)?.reviewMode,
+    run.options.reviewMode ?? true,
+  );
+
+  const updatedOptions = { ...run.options, reviewMode };
+  const updatedRecord = runStore.patch(runId, { options: updatedOptions });
+
+  sendJson(res, 200, { run: toRunResponse(updatedRecord ?? run) });
+}
+
+async function handleContinueRun(
+  req: IncomingMessage,
+  res: ServerResponse,
+  runId: string,
+): Promise<void> {
+  const run = runStore.get(runId);
+  if (!run) {
+    sendJson(res, 404, { error: `Run not found: ${runId}` });
     return;
   }
 
@@ -1509,6 +1521,11 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse): Promis
       return;
     }
 
+    if (method === "POST" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "review-mode") {
+      const runId = decodeURIComponent(pathParts[1]);
+      await handleSetReviewMode(req, res, runId);
+      return;
+    }
 
     if (method === "GET" && pathParts.length === 3 && pathParts[0] === "runs" && pathParts[2] === "events") {
       const runId = decodeURIComponent(pathParts[1]);
