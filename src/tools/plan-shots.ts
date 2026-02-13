@@ -1,41 +1,11 @@
-import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import type { StoryAnalysis, Shot } from "../types";
 
-// Zod schema for shots array
-const shotSchema = z.object({
-  shotNumber: z.number(),
-  sceneNumber: z.number(),
-  shotInScene: z.number(),
-  durationSeconds: z.enum(["4", "6", "8"]).transform(v => parseInt(v)),
-  shotType: z.literal("first_last_frame"),
-  composition: z.string(),
-  startFramePrompt: z.string(),
-  endFramePrompt: z.string(),
-  actionPrompt: z.string(),
-  dialogue: z.string(),
-  soundEffects: z.string(),
-  cameraDirection: z.string(),
-  charactersPresent: z.array(z.string()),
-  location: z.string(),
-  continuousFromPrevious: z.boolean(),
-});
+// ---------------------------------------------------------------------------
+// Cinematic rules — exported so the orchestrator can include them in prompts
+// ---------------------------------------------------------------------------
 
-const sceneShotsSchema = z.object({
-  scenes: z.array(z.object({
-    sceneNumber: z.number(),
-    transition: z.enum(["cut", "fade_black", "cross_dissolve", "fade_white", "wipe_left"]).describe("Transition into this scene. Scene 1 is always 'cut'. Use fade_black for mood shifts, cross_dissolve for time passing, fade_white for dreamy/emotional moments, wipe_left sparingly for dramatic reveals."),
-    shots: z.array(shotSchema),
-  })),
-});
-
-/**
- * Plans shots for each scene with cinematic composition and dialogue pacing.
- * Uses Claude Opus 4.6 with structured output.
- */
-export async function planShots(analysis: StoryAnalysis): Promise<StoryAnalysis> {
-  const cinematicRules = `
+export const CINEMATIC_RULES = `
 CINEMATIC COMPOSITION RULES:
 
 Dialogue Scenes:
@@ -64,13 +34,6 @@ DIALOGUE PACING:
 - 6s clip: ~10-12 words
 - 4s clip: ~6-8 words
 - Not every shot needs dialogue - silence and reactions are valid
-`;
-
-  const scenesJson = JSON.stringify(analysis.scenes, null, 2);
-
-  const prompt = `You are a cinematic shot planner. Break down each scene into shots respecting the 8-second clip limit.
-
-${cinematicRules}
 
 SCENE TRANSITIONS:
 - Scene 1 always uses "cut" (no transition before the first scene)
@@ -80,19 +43,6 @@ SCENE TRANSITIONS:
 - "wipe_left" sparingly for dramatic reveals
 - Keep transitions SHORT (0.5-1 second) — they shouldn't distract
 
-Story Analysis:
-${scenesJson}
-
-For each scene:
-1. Choose a transition type (cut, fade_black, cross_dissolve, fade_white, or wipe_left)
-2. Break into shots (each 4, 6, or 8 seconds)
-3. Assign cinematic composition types (use underscore format: wide_establishing, over_the_shoulder, etc.)
-4. Distribute dialogue across shots respecting pacing rules
-5. All shots use first_last_frame generation strategy
-6. Write detailed frame prompts that include the composition type
-7. Write action prompts for video generation
-8. Include dialogue as quoted speech if present
-
 CROSS-SHOT CONTINUITY:
 - Set continuousFromPrevious: true when this shot continues directly from the previous shot within the same scene — same location, continuous action, no time skip. The camera angle/composition may change but the scene content is continuous.
 - Set continuousFromPrevious: false when:
@@ -101,67 +51,85 @@ CROSS-SHOT CONTINUITY:
   - The location changes from the previous shot
   - The action is not continuous (e.g., reaction shot after a pause)
 - When continuousFromPrevious is true, the system will reuse the previous shot's end frame as this shot's start frame for perfect visual continuity.
+`;
 
-Return a JSON object with scenes array, where each scene has a transition field and a shots array with all required fields.`;
+// ---------------------------------------------------------------------------
+// Per-scene shot schema (no shotNumber or sceneNumber — auto-assigned)
+// ---------------------------------------------------------------------------
 
-  try {
-    const { object } = await generateObject({
-      model: anthropic("claude-opus-4-6"),
-      schema: sceneShotsSchema,
-      prompt,
-    } as any);
+const perSceneShotSchema = z.object({
+  shotInScene: z.number(),
+  durationSeconds: z.enum(["4", "6", "8"]).transform(v => parseInt(v)),
+  shotType: z.literal("first_last_frame"),
+  composition: z.string(),
+  startFramePrompt: z.string(),
+  endFramePrompt: z.string(),
+  actionPrompt: z.string(),
+  dialogue: z.string(),
+  soundEffects: z.string(),
+  cameraDirection: z.string(),
+  charactersPresent: z.array(z.string()),
+  location: z.string(),
+  continuousFromPrevious: z.boolean(),
+});
 
-    // Merge shots back into analysis
-    const updatedAnalysis = JSON.parse(JSON.stringify(analysis)) as StoryAnalysis;
-    const result = object as any;
+// ---------------------------------------------------------------------------
+// Tool definition — structured save mechanism for per-scene shot data
+// ---------------------------------------------------------------------------
 
-    for (const sceneWithShots of result.scenes) {
-      const sceneIndex = updatedAnalysis.scenes.findIndex(
-        (s) => s.sceneNumber === sceneWithShots.sceneNumber
-      );
-      if (sceneIndex >= 0) {
-        updatedAnalysis.scenes[sceneIndex].shots = sceneWithShots.shots as Shot[];
-      }
-    }
-
-    return updatedAnalysis;
-  } catch (error) {
-    console.error("Error in planShots:", error);
-    throw error;
-  }
-}
-
-/**
- * Vercel AI SDK tool definition for planShots.
- * Claude calls this to plan shots for the analyzed story.
- */
-export const planShotsTool = {
-  description: "Plan cinematic shots for each scene with composition and dialogue pacing",
+export const planShotsForSceneTool = {
+  description: "Save the planned shots for a single scene. Call once per scene, in order.",
   parameters: z.object({
-    analysis: z.object({
-      title: z.string(),
-      artStyle: z.string(),
-      characters: z.array(z.object({
-        name: z.string(),
-        physicalDescription: z.string(),
-        personality: z.string(),
-        ageRange: z.string(),
-      })),
-      locations: z.array(z.object({
-        name: z.string(),
-        visualDescription: z.string(),
-      })),
-      scenes: z.array(z.object({
-        sceneNumber: z.number(),
-        title: z.string(),
-        narrativeSummary: z.string(),
-        charactersPresent: z.array(z.string()),
-        location: z.string(),
-        estimatedDurationSeconds: z.number(),
-        transition: z.enum(["cut", "fade_black", "cross_dissolve", "fade_white", "wipe_left"]).optional().describe("Transition into this scene"),
-        shots: z.array(z.any()), // shots are filled later
-      })),
-    }).describe("The story analysis result from analyzeStory"),
+    sceneNumber: z.number(),
+    transition: z.enum(["cut", "fade_black", "cross_dissolve", "fade_white", "wipe_left"]),
+    shots: z.array(perSceneShotSchema),
   }),
 };
+
+// ---------------------------------------------------------------------------
+// Core function — merges planned shots into the analysis for one scene
+// ---------------------------------------------------------------------------
+
+/**
+ * Merges planned shots for a single scene into the story analysis.
+ * Auto-assigns global `shotNumber` and `sceneNumber` on each shot.
+ */
+export function planShotsForScene(
+  sceneNumber: number,
+  transition: "cut" | "fade_black" | "cross_dissolve" | "fade_white" | "wipe_left",
+  shots: z.infer<typeof planShotsForSceneTool.parameters>["shots"],
+  analysis: StoryAnalysis,
+): StoryAnalysis {
+  // Deep-clone so we don't mutate the original
+  const updatedAnalysis = JSON.parse(JSON.stringify(analysis)) as StoryAnalysis;
+
+  // Find the target scene
+  const sceneIndex = updatedAnalysis.scenes.findIndex(s => s.sceneNumber === sceneNumber);
+  if (sceneIndex < 0) {
+    throw new Error(`Scene ${sceneNumber} not found in analysis`);
+  }
+
+  // Set the scene transition
+  updatedAnalysis.scenes[sceneIndex].transition = transition;
+
+  // Count existing shots across ALL scenes to determine the next global shotNumber
+  let nextShotNumber = 1;
+  for (const scene of updatedAnalysis.scenes) {
+    if (scene.sceneNumber === sceneNumber) continue; // skip the scene we're about to fill
+    nextShotNumber += (scene.shots?.length ?? 0);
+  }
+
+  // Process shots: assign shotNumber, sceneNumber, ensure shotType
+  const processedShots: Shot[] = shots.map((shot) => ({
+    ...shot,
+    shotNumber: nextShotNumber++,
+    sceneNumber,
+    shotType: "first_last_frame" as const,
+    durationSeconds: shot.durationSeconds as 4 | 6 | 8,
+  }));
+
+  updatedAnalysis.scenes[sceneIndex].shots = processedShots;
+
+  return updatedAnalysis;
+}
 

@@ -4,10 +4,10 @@ import { z } from "zod";
 import { writeFileSync } from "fs";
 import { join } from "path";
 
-import type { PipelineOptions, PipelineState, StoryAnalysis } from "./types";
+import type { PipelineOptions, PipelineState } from "./types";
 import { interrupted } from "./signals";
 import { analyzeStory, analyzeStoryTool } from "./tools/analyze-story";
-import { planShots, planShotsTool } from "./tools/plan-shots";
+import { planShotsForScene, planShotsForSceneTool, CINEMATIC_RULES } from "./tools/plan-shots";
 import { generateAsset, generateAssetTool } from "./tools/generate-asset";
 import { generateFrame, generateFrameTool } from "./tools/generate-frame";
 import { generateVideo, generateVideoTool } from "./tools/generate-video";
@@ -285,29 +285,56 @@ async function runShotPlanningStage(
 
   const systemPrompt = `You are a cinematic shot planner. Your job is to break down each scene into shots with cinematic composition.
 
-Call the planShots tool with the story analysis. The tool will return an updated StoryAnalysis with shots populated for each scene.
+${CINEMATIC_RULES}
 
-After receiving the shot plan, respond with a brief summary of the shots planned.`;
+For each scene in the story analysis (in order), call the planShotsForScene tool with:
+- sceneNumber: the scene number
+- transition: the transition type into this scene
+- shots: an array of shot objects with all required fields
+
+Plan shots for ONE scene at a time. Call planShotsForScene once per scene, in scene order.
+
+For each scene:
+1. Choose a transition type (Scene 1 is always "cut")
+2. Break into shots (each 4, 6, or 8 seconds)
+3. Assign cinematic composition types (use underscore format: wide_establishing, over_the_shoulder, etc.)
+4. Distribute dialogue across shots respecting pacing rules
+5. All shots use first_last_frame generation strategy
+6. Write detailed frame prompts that include the composition type
+7. Write action prompts for video generation
+8. Include dialogue as quoted speech if present
+
+After planning all scenes, respond with a brief summary of the shots planned.`;
 
   const analysisJson = JSON.stringify(state.storyAnalysis, null, 2);
   const userPrompt = `Plan cinematic shots for this story analysis:\n\n${analysisJson}`;
 
   const shotTools = {
-    planShots: {
-      description: planShotsTool.description,
-      inputSchema: planShotsTool.parameters,
-      execute: wrapToolExecute("shot_planning", "planShots", async (params: z.infer<typeof planShotsTool.parameters>) => {
-        const result = await planShots(params.analysis as StoryAnalysis);
+    planShotsForScene: {
+      description: planShotsForSceneTool.description,
+      inputSchema: planShotsForSceneTool.parameters,
+      execute: wrapToolExecute("shot_planning", "planShotsForScene", async (params: z.infer<typeof planShotsForSceneTool.parameters>) => {
+        const result = planShotsForScene(
+          params.sceneNumber,
+          params.transition,
+          params.shots,
+          state.storyAnalysis!,
+        );
         state.storyAnalysis = result;
-        return result;
+        await saveState({ state });
+        const sceneShotCount = result.scenes.find(s => s.sceneNumber === params.sceneNumber)?.shots?.length ?? 0;
+        const totalShots = result.scenes.reduce((sum, s) => sum + (s.shots?.length ?? 0), 0);
+        return { sceneNumber: params.sceneNumber, shotsPlanned: sceneShotCount, totalShotsSoFar: totalShots };
       }),
     },
   };
 
-  await runStage("shot_planning", state, options, systemPrompt, userPrompt, shotTools, 5, options.verbose);
+  await runStage("shot_planning", state, options, systemPrompt, userPrompt, shotTools, 30, options.verbose);
 
-  if (!state.storyAnalysis?.scenes?.some((s) => s.shots && s.shots.length > 0)) {
-    throw new Error("Shot planning stage did not produce shots");
+  // Verify ALL scenes have shots
+  const scenesWithoutShots = state.storyAnalysis?.scenes?.filter(s => !s.shots || s.shots.length === 0) ?? [];
+  if (scenesWithoutShots.length > 0) {
+    throw new Error(`Shot planning stage did not produce shots for scenes: ${scenesWithoutShots.map(s => s.sceneNumber).join(", ")}`);
   }
 
   state.completedStages.push("shot_planning");
