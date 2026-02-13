@@ -1325,22 +1325,7 @@ async function handleStopRun(
   console.log('[handleStopRun] Interrupting pipeline for ' + runId + '...');
   setInterrupted(true);
 
-  const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
-  const result = await Promise.race([
-    existingPipeline.then(() => 'done' as const),
-    timeoutPromise,
-  ]);
-
-  if (result === 'timeout') {
-    console.warn('[handleStopRun] Pipeline for ' + runId + ' did not stop within 30s, force-removing');
-    runningPipelines.delete(runId);
-    stopRunStateMonitor(runId);
-    setTimeout(() => setInterrupted(false), 5_000);
-  } else {
-    console.log('[handleStopRun] Pipeline for ' + runId + ' stopped successfully');
-    setInterrupted(false);
-  }
-
+  // Update run status and respond immediately
   runStore.patch(runId, {
     status: "stopped" as RunStatus,
     completedAt: new Date().toISOString(),
@@ -1349,6 +1334,30 @@ async function handleStopRun(
   emitLogEvent(runId, "Pipeline stopped by user");
 
   sendJson(res, 200, { message: "Pipeline stopped" });
+
+  // Fire-and-forget: wait for pipeline to finish in the background
+  void (async () => {
+    try {
+      const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
+      const result = await Promise.race([
+        existingPipeline.then(() => 'done' as const),
+        timeoutPromise,
+      ]);
+
+      if (result === 'timeout') {
+        console.warn('[handleStopRun] Pipeline for ' + runId + ' did not stop within 30s, force-removing');
+        runningPipelines.delete(runId);
+        stopRunStateMonitor(runId);
+        setTimeout(() => setInterrupted(false), 5_000);
+      } else {
+        console.log('[handleStopRun] Pipeline for ' + runId + ' stopped successfully');
+        setInterrupted(false);
+      }
+    } catch (err) {
+      console.error('[handleStopRun] Error during background cleanup for ' + runId + ':', err);
+      setInterrupted(false);
+    }
+  })();
 }
 
 async function handleSetReviewMode(
