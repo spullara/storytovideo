@@ -32,6 +32,7 @@ const elements = {
   createRunForm: getElement("create-run-form"),
   storyText: getElement("story-text"),
   createRunButton: getElement("create-run-button"),
+  reviewModeCheckbox: getElement("review-mode-checkbox"),
   runSelect: getElement("run-select"),
   refreshRunsButton: getElement("refresh-runs-button"),
   runId: getElement("run-id"),
@@ -940,7 +941,7 @@ async function handleCreateRunSubmit(event) {
       body: JSON.stringify({
         storyText,
         options: {
-          reviewMode: true,
+          reviewMode: elements.reviewModeCheckbox.checked,
         },
       }),
     });
