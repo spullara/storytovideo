@@ -427,6 +427,9 @@ function buildPipelineOptions(request: CreateRunRequest, runId: string): Pipelin
     resume: options.resume ?? false,
     verbose: options.verbose ?? false,
     reviewMode: options.reviewMode ?? true,
+    onToolError: (stage: string, tool: string, error: string) => {
+      emitLogEvent(runId, `[${stage}] ${tool} failed: ${error}`, "error");
+    },
   };
 }
 

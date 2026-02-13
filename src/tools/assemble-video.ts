@@ -91,16 +91,15 @@ async function burnSubtitles(videoPath: string, assPath: string): Promise<void> 
   const base = path.basename(videoPath, ext);
   const tempPath = path.join(dir, `${base}_subtitled${ext}`);
 
-  // Escape special characters in the ASS path for ffmpeg filter
-  // ffmpeg filter syntax requires escaping colons, backslashes, and single quotes
+  // Escape special characters in the ASS path for ffmpeg filter syntax.
+  // execFile bypasses the shell, so we only need ffmpeg filter-level escaping.
   const escapedAssPath = assPath
-    .replace(/\\/g, "\\\\\\\\")
-    .replace(/:/g, "\\\\:")
-    .replace(/'/g, "'\\\\''");
+    .replace(/\\/g, "\\\\")
+    .replace(/:/g, "\\:");
 
   await execFileAsync("ffmpeg", [
     "-i", videoPath,
-    "-vf", `ass='${escapedAssPath}'`,
+    "-vf", `ass=${escapedAssPath}`,
     "-c:v", "libx264",
     "-preset", "medium",
     "-crf", "23",

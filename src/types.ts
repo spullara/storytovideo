@@ -69,6 +69,7 @@ export interface PipelineOptions {
   resume: boolean;
   verbose: boolean;
   reviewMode?: boolean;
+  onToolError?: (stageName: string, toolName: string, error: string) => void;
 }
 
 export interface StageInstructionRecord {

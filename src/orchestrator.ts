@@ -40,7 +40,7 @@ const STAGE_ORDER: StageName[] = [
 // Tool execute wrapper — logs success/failure for debugging
 // ---------------------------------------------------------------------------
 
-function wrapToolExecute<T>(stageName: string, toolName: string, fn: (params: any) => Promise<T>): (params: any) => Promise<T> {
+function wrapToolExecute<T>(stageName: string, toolName: string, fn: (params: any) => Promise<T>, onError?: (stageName: string, toolName: string, error: string) => void): (params: any) => Promise<T> {
   return async (params: any) => {
     try {
       const result = await fn(params);
@@ -49,6 +49,9 @@ function wrapToolExecute<T>(stageName: string, toolName: string, fn: (params: an
     } catch (error) {
       console.error(`[${stageName}] Tool FAILED (${toolName}):`, error instanceof Error ? error.message : error);
       console.error(`[${stageName}] Tool params were:`, JSON.stringify(params)?.substring(0, 500));
+      if (onError) {
+        onError(stageName, toolName, error instanceof Error ? error.message : String(error));
+      }
       throw error;
     }
   };
@@ -256,7 +259,7 @@ After receiving the analysis, respond with a brief summary of what was found.`;
         const result = await analyzeStory(params.storyText);
         state.storyAnalysis = result;
         return result;
-      }),
+      }, options.onToolError),
     },
   };
 
@@ -325,7 +328,7 @@ After planning all scenes, respond with a brief summary of the shots planned.`;
         const sceneShotCount = result.scenes.find(s => s.sceneNumber === params.sceneNumber)?.shots?.length ?? 0;
         const totalShots = result.scenes.reduce((sum, s) => sum + (s.shots?.length ?? 0), 0);
         return { sceneNumber: params.sceneNumber, shotsPlanned: sceneShotCount, totalShotsSoFar: totalShots };
-      }),
+      }, options.onToolError),
     },
   };
 
@@ -430,14 +433,14 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
         }
         await saveState({ state });
         return result;
-      }),
+      }, options.onToolError),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
       execute: wrapToolExecute("asset_generation", "saveState", async () => {
         return saveState({ state });
-      }),
+      }, options.onToolError),
     },
   };
 
@@ -447,7 +450,7 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
       inputSchema: verifyOutputTool.parameters,
       execute: wrapToolExecute("asset_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      }),
+      }, options.onToolError),
     };
   }
 
@@ -559,14 +562,14 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
         };
         await saveState({ state });
         return result;
-      }),
+      }, options.onToolError),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
       execute: wrapToolExecute("frame_generation", "saveState", async () => {
         return saveState({ state });
-      }),
+      }, options.onToolError),
     },
   };
 
@@ -576,7 +579,7 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
       inputSchema: verifyOutputTool.parameters,
       execute: wrapToolExecute("frame_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      }),
+      }, options.onToolError),
     };
   }
 
@@ -666,14 +669,14 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
         state.generatedVideos[result.shotNumber] = result.path;
         await saveState({ state });
         return result;
-      }),
+      }, options.onToolError),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
       execute: wrapToolExecute("video_generation", "saveState", async () => {
         return saveState({ state });
-      }),
+      }, options.onToolError),
     },
   };
 
@@ -683,7 +686,7 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
       inputSchema: verifyOutputTool.parameters,
       execute: wrapToolExecute("video_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      }),
+      }, options.onToolError),
     };
   }
 
@@ -808,14 +811,14 @@ Output directory: "${options.outputDir}"`;
           subtitles,
           dryRun: options.dryRun,
         });
-      }),
+      }, options.onToolError),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
       execute: wrapToolExecute("assembly", "saveState", async () => {
         return saveState({ state });
-      }),
+      }, options.onToolError),
     },
   };
 
