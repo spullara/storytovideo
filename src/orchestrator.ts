@@ -190,46 +190,60 @@ async function runStage(
   const injectedSystemPrompt =
     systemPrompt + buildInstructionInjectionBlock(stageInstructions);
 
-  const result = await generateText({
-    model: anthropic("claude-opus-4-6") as any,
-    system: injectedSystemPrompt,
-    prompt: userPrompt,
-    tools,
-    stopWhen: stepCountIs(maxSteps),
-    onStepFinish: (step: any) => {
-      console.log(`[${stageName}] Step keys:`, Object.keys(step).join(', '));
-      if (step.text) {
-        console.log(`[${stageName}] Claude: ${step.text.substring(0, 200)}`);
-      }
-      if (step.toolCalls && step.toolCalls.length > 0) {
-        for (const tc of step.toolCalls) {
-          console.log(`[${stageName}] Tool call: ${tc.toolName}`);
+  const abortController = new AbortController();
+
+  try {
+    const result = await generateText({
+      model: anthropic("claude-opus-4-6") as any,
+      system: injectedSystemPrompt,
+      prompt: userPrompt,
+      tools,
+      abortSignal: abortController.signal,
+      stopWhen: stepCountIs(maxSteps),
+      onStepFinish: (step: any) => {
+        if (interrupted) {
+          abortController.abort();
         }
-      }
-      if (step.toolResults && step.toolResults.length > 0) {
-        for (const tr of step.toolResults) {
-          const resultStr = JSON.stringify(tr.result);
-          if (tr.type === 'error' || (resultStr && resultStr.includes('"error"'))) {
-            console.error(`[${stageName}] Tool error (${tr.toolName}):`, resultStr);
-          } else {
-            console.log(`[${stageName}] Tool result (${tr.toolName}): ${resultStr?.substring(0, 200) ?? '(no result)'}`);
+        console.log(`[${stageName}] Step keys:`, Object.keys(step).join(', '));
+        if (step.text) {
+          console.log(`[${stageName}] Claude: ${step.text.substring(0, 200)}`);
+        }
+        if (step.toolCalls && step.toolCalls.length > 0) {
+          for (const tc of step.toolCalls) {
+            console.log(`[${stageName}] Tool call: ${tc.toolName}`);
           }
         }
-      }
-    },
-  } as any);
+        if (step.toolResults && step.toolResults.length > 0) {
+          for (const tr of step.toolResults) {
+            const resultStr = JSON.stringify(tr.result);
+            if (tr.type === 'error' || (resultStr && resultStr.includes('"error"'))) {
+              console.error(`[${stageName}] Tool error (${tr.toolName}):`, resultStr);
+            } else {
+              console.log(`[${stageName}] Tool result (${tr.toolName}): ${resultStr?.substring(0, 200) ?? '(no result)'}`);
+            }
+          }
+        }
+      },
+    } as any);
 
-  // Always log why the agent stopped
-  const stepCount = result.steps?.length ?? 0;
-  const finishReason = result.finishReason ?? "unknown";
-  console.log(`[${stageName}] Agent finished: reason=${finishReason}, steps=${stepCount}/${maxSteps}`);
-  if (result.usage) {
-    const input = result.usage.inputTokens ?? 0;
-    const output = result.usage.outputTokens ?? 0;
-    console.log(`[${stageName}] Token usage: input=${input}, output=${output}, total=${input + output}`);
+    // Always log why the agent stopped
+    const stepCount = result.steps?.length ?? 0;
+    const finishReason = result.finishReason ?? "unknown";
+    console.log(`[${stageName}] Agent finished: reason=${finishReason}, steps=${stepCount}/${maxSteps}`);
+    if (result.usage) {
+      const input = result.usage.inputTokens ?? 0;
+      const output = result.usage.outputTokens ?? 0;
+      console.log(`[${stageName}] Token usage: input=${input}, output=${output}, total=${input + output}`);
+    }
+
+    console.log(`[${stageName}] Final text:`, result.text?.substring(0, 300) || "(no text)");
+  } catch (error: any) {
+    if (error?.name === 'AbortError' && interrupted) {
+      console.log(`[${stageName}] Aborted due to pipeline interruption`);
+      return state;
+    }
+    throw error;
   }
-
-  console.log(`[${stageName}] Final text:`, result.text?.substring(0, 300) || "(no text)");
 
   return state;
 }
