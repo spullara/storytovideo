@@ -1079,7 +1079,7 @@ async function handleRedoRun(
   }
 
   // Clear data from the target stage onward
-  clearStageData(state, stage as any);
+  clearStageData(state, stage as any, run.outputDir);
 
   // Save the cleared state
   await saveState({ state });
