@@ -1,7 +1,7 @@
 import { generateText, stepCountIs } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
-import { writeFileSync } from "fs";
+import { writeFileSync, readdirSync, unlinkSync } from "fs";
 import { join } from "path";
 
 import type { PipelineOptions, PipelineState } from "./types";
@@ -108,6 +108,59 @@ function buildInstructionInjectionBlock(instructions: string[]): string {
 }
 
 /**
+ * Delete generated files from disk for a given stage and all downstream stages.
+ * Each stage clears its own files plus all later stages' files (cumulative).
+ * Directory structures are preserved — only contents are deleted.
+ */
+function clearStageFiles(outputDir: string, fromStage: StageName): void {
+  const stageIdx = STAGE_ORDER.indexOf(fromStage);
+  if (stageIdx < 0) return;
+
+  /** Delete a single file, ignoring missing-file errors. */
+  function tryUnlink(filePath: string): void {
+    try { unlinkSync(filePath); } catch (_) { /* file may not exist */ }
+  }
+
+  /** Delete all files inside a directory (non-recursive), ignoring errors. */
+  function clearDir(dirPath: string): void {
+    try {
+      for (const entry of readdirSync(dirPath)) {
+        tryUnlink(join(dirPath, entry));
+      }
+    } catch (_) { /* directory may not exist */ }
+  }
+
+  // assembly (5): final.mp4, final.ass
+  if (stageIdx <= 5) {
+    tryUnlink(join(outputDir, "final.mp4"));
+    tryUnlink(join(outputDir, "final.ass"));
+  }
+
+  // video_generation (4): videos/
+  if (stageIdx <= 4) {
+    clearDir(join(outputDir, "videos"));
+  }
+
+  // frame_generation (3): frames/
+  if (stageIdx <= 3) {
+    clearDir(join(outputDir, "frames"));
+  }
+
+  // asset_generation (2): assets/characters/, assets/locations/
+  if (stageIdx <= 2) {
+    clearDir(join(outputDir, "assets", "characters"));
+    clearDir(join(outputDir, "assets", "locations"));
+  }
+
+  // shot_planning (1): no files to delete (shots live in state JSON)
+
+  // analysis (0): story_analysis.json
+  if (stageIdx <= 0) {
+    tryUnlink(join(outputDir, "story_analysis.json"));
+  }
+}
+
+/**
  * Clear item-level data for a given stage and all subsequent stages.
  * This is used by the --redo option to reset state before re-running a stage.
  *
@@ -119,10 +172,15 @@ function buildInstructionInjectionBlock(instructions: string[]): string {
  * - video_generation (4): clear generatedVideos
  * - assembly (5): nothing to clear
  */
-export function clearStageData(state: PipelineState, fromStage: StageName): void {
+export function clearStageData(state: PipelineState, fromStage: StageName, outputDir?: string): void {
   const stageIdx = STAGE_ORDER.indexOf(fromStage);
   if (stageIdx < 0) {
     throw new Error(`Unknown stage: ${fromStage}`);
+  }
+
+  // Delete generated files from disk before clearing state
+  if (outputDir) {
+    clearStageFiles(outputDir, fromStage);
   }
 
   // Clear data based on stage index
@@ -136,6 +194,11 @@ export function clearStageData(state: PipelineState, fromStage: StageName): void
   } else if (stageIdx <= 1) {
     // shot_planning: clear asset-related and downstream
     state.assetLibrary = null;
+    if (state.storyAnalysis) {
+      for (const scene of state.storyAnalysis.scenes) {
+        scene.shots = [];
+      }
+    }
     state.generatedAssets = {};
     state.generatedFrames = {};
     state.generatedVideos = {};
@@ -913,7 +976,7 @@ export async function runPipeline(
       state.interrupted = false;
     }
     // Clear data from the target stage onward
-    clearStageData(state, options.redo as StageName);
+    clearStageData(state, options.redo as StageName, options.outputDir);
     // Save the cleared state immediately
     await saveState({ state });
     console.log(`Redoing stage: ${options.redo}`);
