@@ -70,6 +70,7 @@ export interface PipelineOptions {
   verbose: boolean;
   reviewMode?: boolean;
   onToolError?: (stageName: string, toolName: string, error: string) => void;
+  abortSignal?: AbortSignal;
 }
 
 export interface StageInstructionRecord {

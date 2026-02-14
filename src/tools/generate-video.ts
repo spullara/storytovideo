@@ -19,6 +19,7 @@ export async function generateVideo(params: {
   endFramePath: string;
   outputDir: string;
   dryRun?: boolean;
+  abortSignal?: AbortSignal;
   pendingJobStore?: {
     get: (key: string) => { jobId: string; outputPath: string } | undefined;
     set: (key: string, value: { jobId: string; outputPath: string }) => Promise<void>;
@@ -37,6 +38,7 @@ export async function generateVideo(params: {
     endFramePath,
     outputDir,
     dryRun = false,
+    abortSignal,
     pendingJobStore,
   } = params;
 
@@ -125,7 +127,7 @@ export async function generateVideo(params: {
 
         // Poll for job completion
         console.log(`[generateVideo] Polling for completion (job: ${jobId})`);
-        const result = await pollJob(jobId);
+        const result = await pollJob(jobId, abortSignal);
 
         if (result.status !== "completed") {
           throw new Error(`Job ${jobId} did not complete successfully: ${result.status}`);

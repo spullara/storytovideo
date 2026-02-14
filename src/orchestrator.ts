@@ -40,8 +40,11 @@ const STAGE_ORDER: StageName[] = [
 // Tool execute wrapper — logs success/failure for debugging
 // ---------------------------------------------------------------------------
 
-function wrapToolExecute<T>(stageName: string, toolName: string, fn: (params: any) => Promise<T>, onError?: (stageName: string, toolName: string, error: string) => void): (params: any) => Promise<T> {
+function wrapToolExecute<T>(stageName: string, toolName: string, fn: (params: any) => Promise<T>, onError?: (stageName: string, toolName: string, error: string) => void, signal?: AbortSignal): (params: any) => Promise<T> {
   return async (params: any) => {
+    if (signal?.aborted) {
+      throw new Error(`Tool ${toolName} aborted: pipeline interrupted`);
+    }
     try {
       const result = await fn(params);
       console.log(`[${stageName}] Tool success (${toolName}): ${JSON.stringify(result)?.substring(0, 200)}`);
@@ -253,7 +256,11 @@ async function runStage(
   const injectedSystemPrompt =
     systemPrompt + buildInstructionInjectionBlock(stageInstructions);
 
-  const abortController = new AbortController();
+  const localAbort = new AbortController();
+  if (_options.abortSignal) {
+    _options.abortSignal.addEventListener('abort', () => localAbort.abort(), { once: true });
+    if (_options.abortSignal.aborted) localAbort.abort(); // Already aborted
+  }
 
   try {
     const result = await generateText({
@@ -261,11 +268,11 @@ async function runStage(
       system: injectedSystemPrompt,
       prompt: userPrompt,
       tools,
-      abortSignal: abortController.signal,
+      abortSignal: localAbort.signal,
       stopWhen: stepCountIs(maxSteps),
       onStepFinish: (step: any) => {
-        if (interrupted) {
-          abortController.abort();
+        if (interrupted || _options.abortSignal?.aborted) {
+          localAbort.abort();
         }
         console.log(`[${stageName}] Step keys:`, Object.keys(step).join(', '));
         if (step.text) {
@@ -301,7 +308,7 @@ async function runStage(
 
     console.log(`[${stageName}] Final text:`, result.text?.substring(0, 300) || "(no text)");
   } catch (error: any) {
-    if (error?.name === 'AbortError' && interrupted) {
+    if (error?.name === 'AbortError' && (interrupted || _options.abortSignal?.aborted)) {
       console.log(`[${stageName}] Aborted due to pipeline interruption`);
       return state;
     }
@@ -336,7 +343,7 @@ After receiving the analysis, respond with a brief summary of what was found.`;
         const result = await analyzeStory(params.storyText);
         state.storyAnalysis = result;
         return result;
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
   };
 
@@ -406,7 +413,7 @@ After planning all scenes, respond with a brief summary of the shots planned.`;
         const sceneShotCount = result.scenes.find(s => s.sceneNumber === params.sceneNumber)?.shots?.length ?? 0;
         const totalShots = result.scenes.reduce((sum, s) => sum + (s.shots?.length ?? 0), 0);
         return { sceneNumber: params.sceneNumber, shotsPlanned: sceneShotCount, totalShotsSoFar: totalShots };
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
   };
 
@@ -511,14 +518,14 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
         }
         await saveState({ state });
         return result;
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
       execute: wrapToolExecute("asset_generation", "saveState", async () => {
         return saveState({ state });
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
   };
 
@@ -528,7 +535,7 @@ Assets still needed: ${JSON.stringify(neededAssets)}`;
       inputSchema: verifyOutputTool.parameters,
       execute: wrapToolExecute("asset_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     };
   }
 
@@ -640,14 +647,14 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
         };
         await saveState({ state });
         return result;
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
       execute: wrapToolExecute("frame_generation", "saveState", async () => {
         return saveState({ state });
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
   };
 
@@ -657,7 +664,7 @@ Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", 
       inputSchema: verifyOutputTool.parameters,
       execute: wrapToolExecute("frame_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     };
   }
 
@@ -738,6 +745,7 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
           ...params,
           dryRun: options.dryRun,
           outputDir: join(options.outputDir, "videos"),
+          abortSignal: options.abortSignal,
           pendingJobStore: {
             get: (key) => state.pendingJobs[key],
             set: async (key, value) => { state.pendingJobs[key] = value; await saveState({ state }); },
@@ -747,14 +755,14 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
         state.generatedVideos[result.shotNumber] = result.path;
         await saveState({ state });
         return result;
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
       execute: wrapToolExecute("video_generation", "saveState", async () => {
         return saveState({ state });
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
   };
 
@@ -764,7 +772,7 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
       inputSchema: verifyOutputTool.parameters,
       execute: wrapToolExecute("video_generation", "verifyOutput", async (params: z.infer<typeof verifyOutputTool.parameters>) => {
         return verifyOutput({ ...params, dryRun: options.dryRun });
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     };
   }
 
@@ -889,14 +897,14 @@ Output directory: "${options.outputDir}"`;
           subtitles,
           dryRun: options.dryRun,
         });
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
     saveState: {
       description: saveStateTool.description,
       inputSchema: saveStateTool.parameters,
       execute: wrapToolExecute("assembly", "saveState", async () => {
         return saveState({ state });
-      }, options.onToolError),
+      }, options.onToolError, options.abortSignal),
     },
   };
 
@@ -1027,7 +1035,7 @@ export async function runPipeline(
     }
 
     // Check for interruption between stages
-    if (interrupted) {
+    if (interrupted || options.abortSignal?.aborted) {
       console.log("\nInterrupted between stages. Saving state...");
       state.interrupted = true;
       await saveState({ state });
@@ -1047,7 +1055,7 @@ export async function runPipeline(
     // Re-run stage until it completes (handles partial completions from AI agent hitting maxSteps)
     while (!state.completedStages.includes(stageName)) {
       // Check for interruption before each attempt
-      if (interrupted) {
+      if (interrupted || options.abortSignal?.aborted) {
         console.log("\nInterrupted during stage retry. Saving state...");
         state.interrupted = true;
         await saveState({ state });

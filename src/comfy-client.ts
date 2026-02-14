@@ -105,13 +105,14 @@ export async function checkJob(jobId: string): Promise<{ status: string; outputA
  * @returns Job status and output asset IDs
  */
 export async function pollJob(
-  jobId: string
+  jobId: string,
+  signal?: AbortSignal,
 ): Promise<{ status: string; outputAssetIds: string[] }> {
   const baseUrl = getComfyBaseUrl();
   const pollIntervalMs = 5000;
 
   while (true) {
-    if (interrupted) {
+    if (interrupted || signal?.aborted) {
       await cancelJob(jobId);
       throw new Error(`Job ${jobId} cancelled due to pipeline interruption`);
     }
