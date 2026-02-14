@@ -197,8 +197,8 @@ const runStore = new RunStore(RUN_DB_PATH);
 const runEventStream = new RunEventStream();
 const stateSnapshotByRunId = new Map<string, StateSnapshot>();
 const stateMonitorByRunId = new Map<string, NodeJS.Timeout>();
-/** Track running pipeline promises so we can await them during redo */
-const runningPipelines = new Map<string, Promise<void>>();
+/** Track running pipeline promises and their abort controllers so we can stop/redo per-pipeline */
+const runningPipelines = new Map<string, { promise: Promise<void>; abortController: AbortController }>();
 let shutdownReason: string | null = null;
 let shutdownInProgress = false;
 let processExitLogged = false;
@@ -780,6 +780,8 @@ async function runInBackground(runId: string, resume = false): Promise<void> {
   // Clear any stale interruption flag from a previous stop/redo
   setInterrupted(false);
 
+  const abortController = new AbortController();
+
   runStore.patch(runId, {
     status: "running",
     startedAt: new Date().toISOString(),
@@ -792,8 +794,8 @@ async function runInBackground(runId: string, resume = false): Promise<void> {
   const pipeline = (async () => {
     try {
       const pipelineOptions = resume
-        ? { ...record.options, resume: true }
-        : record.options;
+        ? { ...record.options, resume: true, abortSignal: abortController.signal }
+        : { ...record.options, abortSignal: abortController.signal };
       await runPipeline(record.storyText, pipelineOptions);
       pollRunState(runId);
       const state = loadState(record.outputDir);
@@ -856,7 +858,7 @@ async function runInBackground(runId: string, resume = false): Promise<void> {
     }
   })();
 
-  runningPipelines.set(runId, pipeline);
+  runningPipelines.set(runId, { promise: pipeline, abortController });
 }
 
 async function handleCreateRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1031,28 +1033,25 @@ async function handleRedoRun(
 
   console.log('[handleRedoRun] Redo requested for run ' + runId);
 
-  // If there's a running pipeline, interrupt and wait for it to finish
-  const existingPipeline = runningPipelines.get(runId);
-  if (existingPipeline) {
-    console.log('[handleRedoRun] Interrupting running pipeline for ' + runId + '...');
-    setInterrupted(true);
+  // If there's a running pipeline, abort and wait for it to finish
+  const existing = runningPipelines.get(runId);
+  if (existing) {
+    console.log('[handleRedoRun] Aborting running pipeline for ' + runId + '...');
+    existing.abortController.abort();
     // Wait for the old pipeline to actually finish (30s timeout as safety net)
     const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
     const result = await Promise.race([
-      existingPipeline.then(() => 'done' as const),
+      existing.promise.then(() => 'done' as const),
       timeoutPromise,
     ]);
     if (result === 'timeout') {
       // Old pipeline didn't finish in time — force-remove it from the map
-      // so the new pipeline can start. Keep interrupted=true so the old
+      // so the new pipeline can start. The abort signal remains set so the old
       // pipeline will stop at the next checkpoint.
       console.warn(`[handleRedoRun] Pipeline for ${runId} did not stop within 30s, force-removing`);
       runningPipelines.delete(runId);
-      // Clear interrupted after a delay to give old pipeline time to see it
-      setTimeout(() => setInterrupted(false), 5_000);
     } else {
       console.log('[handleRedoRun] Pipeline for ' + runId + ' stopped successfully');
-      setInterrupted(false);
     }
   } else {
     console.log('[handleRedoRun] No running pipeline for ' + runId);
@@ -1148,23 +1147,21 @@ async function handleRedoItem(
     return;
   }
 
-  // If there's a running pipeline, interrupt and wait for it to finish
-  const existingPipeline = runningPipelines.get(runId);
-  if (existingPipeline) {
-    console.log('[handleRedoItem] Interrupting running pipeline for ' + runId + '...');
-    setInterrupted(true);
+  // If there's a running pipeline, abort and wait for it to finish
+  const existing = runningPipelines.get(runId);
+  if (existing) {
+    console.log('[handleRedoItem] Aborting running pipeline for ' + runId + '...');
+    existing.abortController.abort();
     const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
     const result = await Promise.race([
-      existingPipeline.then(() => 'done' as const),
+      existing.promise.then(() => 'done' as const),
       timeoutPromise,
     ]);
     if (result === 'timeout') {
       console.warn(`[handleRedoItem] Pipeline for ${runId} did not stop within 30s, force-removing`);
       runningPipelines.delete(runId);
-      setTimeout(() => setInterrupted(false), 5_000);
     } else {
       console.log('[handleRedoItem] Pipeline for ' + runId + ' stopped successfully');
-      setInterrupted(false);
     }
   } else {
     console.log('[handleRedoItem] No running pipeline for ' + runId);
@@ -1315,15 +1312,15 @@ async function handleStopRun(
 
   console.log('[handleStopRun] Stop requested for run ' + runId);
 
-  const existingPipeline = runningPipelines.get(runId);
-  if (!existingPipeline) {
+  const existing = runningPipelines.get(runId);
+  if (!existing) {
     console.log('[handleStopRun] No running pipeline for ' + runId);
     sendJson(res, 200, { message: "No running pipeline to stop" });
     return;
   }
 
-  console.log('[handleStopRun] Interrupting pipeline for ' + runId + '...');
-  setInterrupted(true);
+  console.log('[handleStopRun] Aborting pipeline for ' + runId + '...');
+  existing.abortController.abort();
 
   // Update run status and respond immediately
   runStore.patch(runId, {
@@ -1340,7 +1337,7 @@ async function handleStopRun(
     try {
       const timeoutPromise = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 30_000));
       const result = await Promise.race([
-        existingPipeline.then(() => 'done' as const),
+        existing.promise.then(() => 'done' as const),
         timeoutPromise,
       ]);
 
@@ -1348,14 +1345,11 @@ async function handleStopRun(
         console.warn('[handleStopRun] Pipeline for ' + runId + ' did not stop within 30s, force-removing');
         runningPipelines.delete(runId);
         stopRunStateMonitor(runId);
-        setTimeout(() => setInterrupted(false), 5_000);
       } else {
         console.log('[handleStopRun] Pipeline for ' + runId + ' stopped successfully');
-        setInterrupted(false);
       }
     } catch (err) {
       console.error('[handleStopRun] Error during background cleanup for ' + runId + ':', err);
-      setInterrupted(false);
     }
   })();
 }
