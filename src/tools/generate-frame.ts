@@ -37,9 +37,29 @@ export async function generateFrame(params: {
     };
   }
 
-  // When continuousFromPrevious is true, the previous end frame is used as a
-  // high-priority style/continuity reference (first in the reference list),
-  // but the start frame is still generated from this shot's own prompt.
+  // Hard continuity: copy previous shot's end frame as this shot's start frame
+  if (shot.continuousFromPrevious && previousEndFramePath && fs.existsSync(previousEndFramePath)) {
+    console.log(`[generateFrame] Shot ${shot.shotNumber}: copying previous end frame for continuity`);
+    fs.copyFileSync(previousEndFramePath, startPath);
+
+    // Generate only the end frame
+    const endFramePath = await generateSingleFrame({
+      shot,
+      artStyle,
+      assetLibrary,
+      isEndFrame: true,
+      previousStartFramePath: startPath,
+      outputPath: endPath,
+    });
+
+    return {
+      shotNumber: shot.shotNumber,
+      startPath,
+      endPath: endFramePath,
+    };
+  }
+
+  // Non-continuous path: generate both frames from prompts
   const continuityRefPath = previousEndFramePath && fs.existsSync(previousEndFramePath)
     ? previousEndFramePath
     : undefined;
@@ -53,7 +73,6 @@ export async function generateFrame(params: {
       isEndFrame: false,
       previousStartFramePath: undefined,
       previousEndFramePath: continuityRefPath,
-      continuityIsHighPriority: shot.continuousFromPrevious === true,
       outputPath: startPath,
     });
 
@@ -89,7 +108,6 @@ async function generateSingleFrame(params: {
   isEndFrame: boolean;
   previousStartFramePath?: string;
   previousEndFramePath?: string;
-  continuityIsHighPriority?: boolean;
   outputPath: string;
 }): Promise<string> {
   const {
@@ -99,7 +117,6 @@ async function generateSingleFrame(params: {
     isEndFrame,
     previousStartFramePath,
     previousEndFramePath,
-    continuityIsHighPriority = false,
     outputPath,
   } = params;
 
@@ -115,9 +132,7 @@ async function generateSingleFrame(params: {
   });
 
   // Collect reference image file paths.
-  // When continuityIsHighPriority is true (continuousFromPrevious), the previous
-  // end frame goes FIRST so the image model treats it as the strongest reference
-  // for art style and lighting consistency. Otherwise: location > character > continuity.
+  // Order: location > character > continuity (previous end frame as low-priority style ref).
   const referenceImagePaths: string[] = [];
 
   // Determine continuity reference path (previous end frame for start frames,
@@ -127,11 +142,6 @@ async function generateSingleFrame(params: {
     continuityRefPath = previousEndFramePath;
   } else if (isEndFrame && previousStartFramePath && fs.existsSync(previousStartFramePath)) {
     continuityRefPath = previousStartFramePath;
-  }
-
-  // If high-priority continuity, add continuity ref FIRST
-  if (continuityIsHighPriority && continuityRefPath) {
-    referenceImagePaths.push(continuityRefPath);
   }
 
   // Add location reference image if available
@@ -153,8 +163,8 @@ async function generateSingleFrame(params: {
     }
   }
 
-  // If normal priority continuity, add continuity ref LAST
-  if (!continuityIsHighPriority && continuityRefPath) {
+  // Add continuity ref LAST (low-priority style reference)
+  if (continuityRefPath) {
     referenceImagePaths.push(continuityRefPath);
   }
 
@@ -170,10 +180,8 @@ async function generateSingleFrame(params: {
         imgTagParts.push(`<img>${i}</img> as location reference`);
       } else if (shot.charactersPresent.length > 0 && refPath === (assetLibrary.characterImages[shot.charactersPresent[0]]?.front || assetLibrary.characterImages[shot.charactersPresent[0]]?.angle)) {
         imgTagParts.push(`<img>${i}</img> as character reference`);
-      } else if (continuityIsHighPriority && refPath === continuityRefPath) {
-        imgTagParts.push(`<img>${i}</img> as style/lighting continuity reference (match art style and palette, NOT content)`);
       } else {
-        imgTagParts.push(`<img>${i}</img> as continuity reference`);
+        imgTagParts.push(`<img>${i}</img> as style continuity reference (match art style and palette, NOT content)`);
       }
     }
     const imgPrefix = `Using ${imgTagParts.join(", ")}: `;

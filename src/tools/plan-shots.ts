@@ -66,7 +66,7 @@ SCENE TRANSITIONS:
 - Keep transitions SHORT (0.5-0.75 second) — they shouldn't distract
 
 CROSS-SHOT CONTINUITY:
-- When continuousFromPrevious is true, the system uses the previous shot's end frame as a STYLE REFERENCE (art style, lighting, color palette) — it does NOT copy or reuse it as the start frame. Each shot's start frame is always generated from its own startFramePrompt.
+- When continuousFromPrevious is true, the system COPIES the previous shot's end frame as this shot's start frame for perfect visual continuity, and only generates the end frame. This means continuousFromPrevious=true must ONLY be used when the camera hasn't moved at all.
 - Set continuousFromPrevious: true ONLY when ALL of these are true:
   1. Same composition type (e.g., both are wide_establishing, or both are insert_cutaway)
   2. Same primary subject (e.g., both focused on the same person or same group)

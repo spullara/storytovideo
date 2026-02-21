@@ -615,15 +615,15 @@ IMPORTANT:
 - Use outputDir="${options.outputDir}".
 - Art style: "${analysis.artStyle}"
 
-CROSS-SHOT STYLE CONTINUITY:
+CROSS-SHOT CONTINUITY:
 - Generate frames IN SHOT ORDER within each scene (shot 1 first, then shot 2, etc.)
 - For each shot AFTER the first in a scene, pass previousEndFramePath = the end frame path of the immediately preceding shot
-- This provides a STYLE REFERENCE for art style, lighting, and color palette consistency across shots — it does NOT copy or override the shot's own prompts
-- Each shot's start frame is ALWAYS generated from its own startFramePrompt. The previousEndFramePath is used only as a visual style reference.
+- When continuousFromPrevious=true: the previous end frame is COPIED as this shot's start frame (hard copy via fs.copyFileSync). Only the end frame is generated. This is intentional — "continuous" means the same camera a few seconds later.
+- When continuousFromPrevious=false: the previous end frame is used as a low-priority STYLE REFERENCE for art style, lighting, and color palette consistency. The start frame is generated from this shot's own startFramePrompt.
 - The first shot of each scene does NOT need previousEndFramePath
 - Look up the previous shot's end frame from state.generatedFrames[previousShotNumber].end
 
-Example: When generating shot 3, if shot 2's end frame is at state.generatedFrames[2].end = "./output/frames/shot_2_end.png", pass previousEndFramePath="./output/frames/shot_2_end.png" to generateFrame for shot 3. Shot 3's start frame will be generated from shot 3's own startFramePrompt, using shot 2's end frame only as a style reference.
+Example: When generating shot 3 (continuousFromPrevious=false), if shot 2's end frame is at state.generatedFrames[2].end = "./output/frames/shot_2_end.png", pass previousEndFramePath="./output/frames/shot_2_end.png" to generateFrame for shot 3. Shot 3's start frame will be generated from shot 3's own startFramePrompt, using shot 2's end frame only as a style reference. If shot 3 has continuousFromPrevious=true, shot 2's end frame will be copied as shot 3's start frame.
 
 Shots needing frames: ${neededFrames.map((s) => `Shot ${s.shotNumber}`).join(", ")}`;
 
