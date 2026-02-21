@@ -390,7 +390,7 @@ For each scene:
 6. Write detailed frame prompts that include the composition type
 7. Write action prompts for video generation
 8. Include dialogue as quoted speech if present
-9. Ensure start and end frame prompts describe the SAME scene, camera angle, and characters — only small motion changes between them. The video model interpolates between two similar images; radically different frames produce bad results.
+9. The camera is FIXED for the duration of each shot. Start and end frame prompts must describe what the SAME stationary camera sees at two moments in time. Same subject, same angle, same composition. NEVER have the start frame describe one person and the end frame describe a different person. To switch to a different person or angle, end this shot and start a new one — that's what cuts are for.
 
 After planning all scenes, respond with a brief summary of the shots planned.`;
 

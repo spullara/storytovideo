@@ -6,6 +6,18 @@ import type { StoryAnalysis, Shot } from "../types";
 // ---------------------------------------------------------------------------
 
 export const CINEMATIC_RULES = `
+FIXED CAMERA RULE (MOST IMPORTANT):
+A shot is what a single, stationary camera sees. The camera does not move, pan, or change its target during a shot.
+- The start frame and end frame are what this SAME fixed camera sees at the beginning and end of the shot.
+- If the start frame is pointed at Person A, the end frame is ALSO pointed at Person A. You CANNOT switch to Person B.
+- If the start frame shows a wide view of a room, the end frame shows the SAME wide view of the SAME room.
+- The ONLY things that can change between start and end: facial expressions, small gestures, body language, a person entering/exiting the frame edges.
+- If you need to show a different person or a different angle: that is a DIFFERENT SHOT. Use a cut.
+- WRONG: Start frame = "close-up of Alice speaking" → End frame = "close-up of Bob reacting" (this is TWO different shots!)
+- RIGHT: Start frame = "close-up of Alice speaking" → End frame = "close-up of Alice finishing her sentence with a slight smile"
+- To switch focus to a different person, END the current shot and START a new shot on that person. This is how real films work — cut to the new subject.
+- Example: Shot 3 = close-up of Alice speaking (start & end both on Alice). Shot 4 = close-up of Bob reacting (start & end both on Bob). Two shots, one cut.
+
 FRAME INTERPOLATION CONSTRAINTS:
 Each shot generates a START frame and an END frame. A video model then interpolates between them.
 - The start and end frames MUST show the SAME scene from the SAME camera angle and composition.
@@ -16,16 +28,23 @@ Each shot generates a START frame and an END frame. A video model then interpola
 - Radically different start and end frames produce bad video — keep changes subtle.
 
 COMPOSITION TYPES (start/end frame differences):
-- wide_establishing: Static wide shot. Start: empty scene or characters entering. End: characters in position. Small motion only.
-- over_the_shoulder: Camera locked behind one character's shoulder. Start/end show the SAME framing. Subject speaks or reacts — only expression and small gestures change.
-- two_shot: Both characters in frame throughout. Start/end differ only in body language, gestures, expressions.
-- close_up: Tight on one face throughout. Start/end differ only in facial expression.
-- medium_shot: Waist-up framing stays consistent. Character gestures or shifts weight between start and end.
-- tracking: Camera follows subject. Start: subject at position A. End: subject at position B. Same background/environment visible throughout.
-- pov: What a character sees. Start/end show the same view with small changes (hand reaches for object, door opens, etc.).
+- wide_establishing: Static wide shot. Start: empty scene or characters entering. End: characters in position. Small motion only. The SAME wide view throughout — do not change the camera position or angle.
+- over_the_shoulder: Camera locked behind ONE character's shoulder for the ENTIRE shot. The person being looked AT stays in frame throughout. Start/end show the SAME framing. Subject speaks or reacts — only expression and small gestures change.
+- two_shot: Both characters in frame throughout. Start/end differ only in body language, gestures, expressions. The SAME two characters remain in frame for the entire shot.
+- close_up: Tight on ONE face for the ENTIRE shot. Start and end show the SAME person's face — only expression changes. NEVER switch to a different person's face.
+- medium_shot: Waist-up of ONE character for the ENTIRE shot. Character gestures or shifts weight between start and end. The SAME person stays in frame throughout.
+- tracking: Camera follows ONE subject. Start: subject at position A. End: subject at position B. Same background/environment visible throughout. The SAME person is tracked the entire time.
+- pov: What ONE character sees. Start/end show the same view with small changes (hand reaches for object, door opens, etc.).
 - insert_cutaway: Close detail shot. Start/end show the same object with a small change (hand picks it up, liquid pours, etc.).
-- low_angle: Fixed dramatic low angle. Same framing rules as medium_shot — only gestures/expressions change.
-- high_angle: Fixed dramatic high angle. Same framing rules as medium_shot — only gestures/expressions change.
+- low_angle: Fixed dramatic low angle on ONE subject. Same framing rules as medium_shot — only gestures/expressions change. The SAME subject throughout.
+- high_angle: Fixed dramatic high angle on ONE subject. Same framing rules as medium_shot — only gestures/expressions change. The SAME subject throughout.
+
+COMMON MISTAKES TO AVOID:
+- Do NOT write a close_up that starts on Character A and ends on Character B — that is two shots.
+- Do NOT write an over_the_shoulder that changes which character's shoulder we're behind — that is two shots.
+- Do NOT write a start frame showing a room from one angle and end frame showing it from another angle — that is two shots.
+- If dialogue passes from A to B during a shot, keep the CAMERA on whoever the shot is framed on. The other character's dialogue happens off-screen or in the next shot.
+- Want to show B's reaction to what A said? Great — make that the NEXT shot (a new close_up on B). Don't try to cram both into one shot.
 
 Typical dialogue scene pattern (2 characters, ~26s):
 1. Wide two-shot establishing (8s) — both characters visible. Start: standing apart. End: facing each other.
