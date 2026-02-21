@@ -17,7 +17,7 @@ type GenerateVideoParams = {
   dialogue: string;
   soundEffects: string;
   cameraDirection: string;
-  durationSeconds: 4 | 6 | 8;
+  durationSeconds: 8;
   startFramePath: string;
   endFramePath: string;
   outputDir: string;
@@ -117,104 +117,73 @@ async function generateVideoVeo(params: GenerateVideoParams): Promise<GenerateVi
         };
 
         // Build config
-        // Veo 3.1 supports 4, 6, or 8 second durations at 720p for interpolation.
-        // Duration must be 8 for extension mode or 1080p/4k.
+        // Veo 3.1 interpolation only supports 8s duration.
         const config: Record<string, unknown> = {
-          durationSeconds: durationSeconds,
+          durationSeconds: 8,
           aspectRatio: "16:9",
           personGeneration: "allow_adult",
         };
 
         console.log(`[generateVideo] Config: durationSeconds=${config.durationSeconds}, aspectRatio=${config.aspectRatio}`);
 
-        // Build duration fallback list: try requested duration first, then longer ones
-        const allDurations: (4 | 6 | 8)[] = [4, 6, 8];
-        const durationsToTry = allDurations.filter((d) => d >= durationSeconds);
+        // Enforce cooldown between consecutive Veo API calls
+        const elapsed = Date.now() - lastVeoCallTimestamp;
+        if (elapsed < VEO_COOLDOWN_MS) {
+          const waitMs = VEO_COOLDOWN_MS - elapsed;
+          console.log(`[generateVideo] Shot ${shotNumber}: Waiting ${Math.ceil(waitMs / 1000)}s cooldown before Veo API call...`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+        lastVeoCallTimestamp = Date.now();
 
-        let actualDuration = durationSeconds;
-        let durationError: unknown;
+        let operation = await client.models.generateVideos({
+          model: "veo-3.1-generate-preview",
+          prompt: videoPrompt,
+          image: startImage,
+          config: {
+            ...config,
+            lastFrame: endImage,
+          } as any,
+        });
 
-        for (const tryDuration of durationsToTry) {
-          // Update config with the duration we're trying
-          config.durationSeconds = tryDuration;
+        // Poll for operation completion
+        console.log(`[generateVideo] Polling for completion (operation: ${operation.name})`);
 
-          // Enforce cooldown between consecutive Veo API calls
-          const elapsed = Date.now() - lastVeoCallTimestamp;
-          if (elapsed < VEO_COOLDOWN_MS) {
-            const waitMs = VEO_COOLDOWN_MS - elapsed;
-            console.log(`[generateVideo] Shot ${shotNumber}: Waiting ${Math.ceil(waitMs / 1000)}s cooldown before Veo API call...`);
-            await new Promise((resolve) => setTimeout(resolve, waitMs));
+        while (!operation.done) {
+          // Check abort signal before polling
+          if (abortSignal?.aborted) {
+            throw new Error("Video generation cancelled due to pipeline interruption");
           }
-          lastVeoCallTimestamp = Date.now();
-
-          try {
-            let operation = await client.models.generateVideos({
-              model: "veo-3.1-generate-preview",
-              prompt: videoPrompt,
-              image: startImage,
-              config: {
-                ...config,
-                lastFrame: endImage,
-              } as any,
-            });
-
-            // Poll for operation completion
-            console.log(`[generateVideo] Polling for completion (operation: ${operation.name})`);
-
-            while (!operation.done) {
-              // Check abort signal before polling
-              if (abortSignal?.aborted) {
-                throw new Error("Video generation cancelled due to pipeline interruption");
-              }
-              await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait 10 seconds between polls
-              operation = await client.operations.getVideosOperation({ operation });
-            }
-
-            // Extract generated video from response
-            const response = operation.response;
-            const generatedVideo = response?.generatedVideos?.[0];
-            if (!generatedVideo?.video) {
-              // Log full response for debugging (may include RAI filter info)
-              const filterCount = response?.raiMediaFilteredCount;
-              const filterReasons = response?.raiMediaFilteredReasons;
-              const errorInfo = operation.error;
-              console.error(`[generateVideo] Shot ${shotNumber}: No video returned.`);
-              if (filterCount) console.error(`[generateVideo]   RAI filtered count: ${filterCount}`);
-              if (filterReasons?.length) console.error(`[generateVideo]   RAI filter reasons: ${filterReasons.join(', ')}`);
-              if (errorInfo) console.error(`[generateVideo]   Operation error: ${JSON.stringify(errorInfo)}`);
-              if (!filterCount && !filterReasons?.length && !errorInfo) {
-                console.error(`[generateVideo]   Full response: ${JSON.stringify(response)}`);
-              }
-              throw new Error(`No video in response for shot ${shotNumber}${filterReasons?.length ? ` (RAI: ${filterReasons.join(', ')})` : ''}`);
-            }
-
-            // Download the video to disk
-            actualDuration = tryDuration;
-            console.log(`[generateVideo] Downloading video for shot ${shotNumber}`);
-            await client.files.download({
-              file: generatedVideo.video,
-              downloadPath: outputPath,
-            });
-
-            console.log(`[generateVideo] Shot ${shotNumber} saved to ${outputPath}`);
-            return { shotNumber, path: outputPath, duration: actualDuration };
-          } catch (durationErr: any) {
-            durationError = durationErr;
-            // If it's a 400 INVALID_ARGUMENT, try the next duration
-            if (durationErr?.status === 400 && (durationErr?.message?.includes('INVALID_ARGUMENT') || durationErr?.message?.includes('use case is currently not supported'))) {
-              const nextIdx = durationsToTry.indexOf(tryDuration) + 1;
-              if (nextIdx < durationsToTry.length) {
-                console.log(`[generateVideo] Shot ${shotNumber}: Duration ${tryDuration}s failed, trying ${durationsToTry[nextIdx]}s...`);
-                continue;
-              }
-            }
-            // Not a duration-related error or no more durations to try — rethrow
-            throw durationErr;
-          }
+          await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait 10 seconds between polls
+          operation = await client.operations.getVideosOperation({ operation });
         }
 
-        // All durations exhausted for this attempt
-        throw durationError;
+        // Extract generated video from response
+        const response = operation.response;
+        const generatedVideo = response?.generatedVideos?.[0];
+        if (!generatedVideo?.video) {
+          // Log full response for debugging (may include RAI filter info)
+          const filterCount = response?.raiMediaFilteredCount;
+          const filterReasons = response?.raiMediaFilteredReasons;
+          const errorInfo = operation.error;
+          console.error(`[generateVideo] Shot ${shotNumber}: No video returned.`);
+          if (filterCount) console.error(`[generateVideo]   RAI filtered count: ${filterCount}`);
+          if (filterReasons?.length) console.error(`[generateVideo]   RAI filter reasons: ${filterReasons.join(', ')}`);
+          if (errorInfo) console.error(`[generateVideo]   Operation error: ${JSON.stringify(errorInfo)}`);
+          if (!filterCount && !filterReasons?.length && !errorInfo) {
+            console.error(`[generateVideo]   Full response: ${JSON.stringify(response)}`);
+          }
+          throw new Error(`No video in response for shot ${shotNumber}${filterReasons?.length ? ` (RAI: ${filterReasons.join(', ')})` : ''}`);
+        }
+
+        // Download the video to disk
+        console.log(`[generateVideo] Downloading video for shot ${shotNumber}`);
+        await client.files.download({
+          file: generatedVideo.video,
+          downloadPath: outputPath,
+        });
+
+        console.log(`[generateVideo] Shot ${shotNumber} saved to ${outputPath}`);
+        return { shotNumber, path: outputPath, duration: 8 };
       } catch (error: any) {
         lastError = error;
         // Don't retry if cancelled due to pipeline interruption
@@ -255,7 +224,7 @@ export const generateVideoTool = {
     dialogue: z.string().describe("Character dialogue (empty if none)"),
     soundEffects: z.string().describe("Sound effects description"),
     cameraDirection: z.string().describe("Camera movement and angle"),
-    durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]).describe("Video duration in seconds"),
+    durationSeconds: z.literal(8).describe("Video duration in seconds (always 8)"),
     startFramePath: z.string().describe("Path to start frame image"),
     endFramePath: z.string().describe("Path to end frame image"),
     outputDir: z.string().describe("Output directory for video file"),

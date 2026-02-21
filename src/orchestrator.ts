@@ -383,7 +383,7 @@ Plan shots for ONE scene at a time. Call planShotsForScene once per scene, in sc
 
 For each scene:
 1. Choose a transition type (Scene 1 is always "cut")
-2. Break into shots (each 4, 6, or 8 seconds)
+2. Break into shots (each shot is 8 seconds)
 3. Assign cinematic composition types (use underscore format: wide_establishing, over_the_shoulder, etc.)
 4. Distribute dialogue across shots respecting pacing rules
 5. All shots use first_last_frame generation strategy

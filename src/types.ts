@@ -14,7 +14,7 @@ export interface Shot {
   shotNumber: number;          // global shot number across entire video
   sceneNumber: number;         // which scene this belongs to
   shotInScene: number;         // shot index within the scene (1, 2, 3...)
-  durationSeconds: 4 | 6 | 8;
+  durationSeconds: 8;
   shotType: "first_last_frame";
   composition: string;         // "wide_establishing" | "over_the_shoulder" | "two_shot" | "close_up" | "medium_shot" | "tracking" | "pov" | "insert_cutaway" | "low_angle" | "high_angle"
   startFramePrompt: string;
