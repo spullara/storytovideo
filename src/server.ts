@@ -1785,7 +1785,7 @@ function registerProcessLifecycleHandlers(apiServer: typeof server): void {
 async function resumeStaleRuns(): Promise<void> {
   const allRuns = runStore.list();
   const staleRuns = allRuns.filter(
-    (run) => run.status === "queued" || run.status === "running" || run.status === "awaiting_review"
+    (run) => run.status === "queued" || run.status === "running" || run.status === "awaiting_review" || run.status === "failed" || run.status === "stopped"
   );
 
   if (staleRuns.length === 0) {
@@ -1856,6 +1856,32 @@ async function resumeStaleRuns(): Promise<void> {
           currentStage: state.currentStage,
         });
         awaitingReview++;
+      } else if (run.status === "failed" || run.status === "stopped") {
+        // Only auto-resume failed/stopped runs that made progress (have completed stages)
+        if (state.completedStages.length === 0) {
+          console.log(`[Recovery] Run ${run.id} failed with no progress — leaving as failed`);
+          failed++;
+          continue;
+        }
+        runStore.patch(run.id, {
+          status: "queued",
+          completedAt: undefined,
+          error: undefined,
+          currentStage: state.currentStage,
+          completedStages: state.completedStages,
+        });
+        startRunStateMonitor(run.id);
+        setImmediate(() => {
+          void runInBackground(run.id, true);
+        });
+        console.log(`[Recovery] Run ${run.id} auto-resuming ${run.status} run from ${state.currentStage}`);
+        appendServerDiagnostic("run_recovery_resumed_failed", {
+          runId: run.id,
+          outputDir: run.outputDir,
+          currentStage: state.currentStage,
+          completedStages: state.completedStages,
+        });
+        recovered++;
       } else {
         // Run was in progress - resume execution
         runStore.patch(run.id, {
