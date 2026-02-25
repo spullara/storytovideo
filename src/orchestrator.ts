@@ -90,7 +90,53 @@ function createInitialState(storyFile: string, outputDir: string): PipelineState
 
 
 
-function compactState(state: PipelineState): string {
+function compactState(state: PipelineState, stageName?: string): string {
+  if (stageName === 'video_generation') {
+    // Only include what the video generation agent needs — skip characters, locations,
+    // frame prompts, narrative summaries, and other large fields to stay within context limits.
+    const allShots = state.storyAnalysis?.scenes.flatMap(s => s.shots || []) ?? [];
+    const remainingShots = allShots.filter(s => !state.generatedVideos[s.shotNumber]);
+
+    const compact = {
+      outputDir: state.outputDir,
+      generatedVideos: state.generatedVideos,
+      generatedFrames: Object.fromEntries(
+        remainingShots.map(s => [s.shotNumber, state.generatedFrames[s.shotNumber]])
+      ),
+      remainingShots: remainingShots.map(s => ({
+        shotNumber: s.shotNumber,
+        sceneNumber: s.sceneNumber,
+        durationSeconds: s.durationSeconds,
+        shotType: s.shotType,
+        actionPrompt: s.actionPrompt,
+        dialogue: s.dialogue,
+        soundEffects: s.soundEffects,
+        cameraDirection: s.cameraDirection,
+      })),
+    };
+    return JSON.stringify(compact, null, 2);
+  }
+
+  if (stageName === 'assembly') {
+    // Assembly only needs video paths, scene transitions, and dialogue for subtitles.
+    const compact = {
+      outputDir: state.outputDir,
+      generatedVideos: state.generatedVideos,
+      scenes: state.storyAnalysis?.scenes.map(s => ({
+        sceneNumber: s.sceneNumber,
+        transition: s.transition,
+        shots: (s.shots || []).map(shot => ({
+          shotNumber: shot.shotNumber,
+          sceneNumber: shot.sceneNumber,
+          durationSeconds: shot.durationSeconds,
+          dialogue: shot.dialogue,
+        })),
+      })),
+    };
+    return JSON.stringify(compact, null, 2);
+  }
+
+  // Default: full state (for analysis, shot_planning, asset_generation, frame_generation)
   return JSON.stringify(state, null, 2);
 }
 
@@ -308,6 +354,11 @@ async function runStage(
 
     console.log(`[${stageName}] Final text:`, result.text?.substring(0, 300) || "(no text)");
   } catch (error: any) {
+    // Handle prompt too long by returning gracefully — outer loop will restart with fresh context
+    if (error?.message?.includes('prompt is too long') || error?.message?.includes('maximum context length')) {
+      console.warn(`[${stageName}] Context window exceeded. Will restart stage with fresh context.`);
+      return state;
+    }
     if (error?.name === 'AbortError' && (interrupted || _options.abortSignal?.aborted)) {
       console.log(`[${stageName}] Aborted due to pipeline interruption`);
       return state;
@@ -465,7 +516,7 @@ async function runAssetGenerationStage(
     return state;
   }
 
-  const stateJson = compactState(state);
+  const stateJson = compactState(state, 'asset_generation');
   const systemPrompt = `You are an asset generation agent. Generate reference images for characters and locations.
 
 Current pipeline state:
@@ -599,7 +650,7 @@ async function runFrameGenerationStage(
     return state;
   }
 
-  const stateJson = compactState(state);
+  const stateJson = compactState(state, 'frame_generation');
   const systemPrompt = `You are a frame generation agent. Generate start and end keyframe images for all shots.
 
 Current pipeline state:
@@ -711,7 +762,7 @@ async function runVideoGenerationStage(
     return state;
   }
 
-  const stateJson = compactState(state);
+  const stateJson = compactState(state, 'video_generation');
   const systemPrompt = `You are a video generation agent. Generate video clips for each shot using first+last frame interpolation.
 
 Current pipeline state:
