@@ -37,6 +37,17 @@ const STAGE_ORDER: StageName[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Stage rollback error — thrown to restart the pipeline loop from an earlier stage
+// ---------------------------------------------------------------------------
+
+class StageRollbackError extends Error {
+  constructor(public targetStage: string, message: string) {
+    super(message);
+    this.name = 'StageRollbackError';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tool execute wrapper — logs success/failure for debugging
 // ---------------------------------------------------------------------------
 
@@ -842,12 +853,9 @@ Shots needing videos: ${neededVideos.map((s) => `Shot ${s.shotNumber}`).join(", 
 
             await saveState({ state });
 
-            // Return a result that tells Claude to stop — the stage will be restarted
-            return {
-              shotNumber: params.shotNumber,
-              error: "RAI celebrity filter triggered. Rolling back to frame_generation to regenerate frames. Stage will restart.",
-              rolledBack: true,
-            };
+            // Throw to break out of the current stage and restart the pipeline loop
+            throw new StageRollbackError('frame_generation',
+              `Shot ${params.shotNumber}: RAI celebrity filter triggered. Rolling back to frame_generation.`);
           }
           throw error;
         }
@@ -1123,110 +1131,128 @@ export async function runPipeline(
     await saveState({ state });
   }
 
-  for (const stageName of STAGE_ORDER) {
-    // Skip completed stages
-    if (state.completedStages.includes(stageName)) {
-      console.log(`Skipping completed stage: ${stageName}`);
-      continue;
-    }
+  // Outer loop to handle stage rollbacks (e.g., RAI celebrity filter triggers re-generation)
+  let maxRollbacks = 5;
+  while (maxRollbacks-- > 0) {
+    let rolledBack = false;
 
-    // Check for interruption between stages
-    if (interrupted || options.abortSignal?.aborted) {
-      console.log("\nInterrupted between stages. Saving state...");
-      state.interrupted = true;
-      await saveState({ state });
-      console.log("Pipeline interrupted. Resume with: storytovideo <story> --resume");
-      return;
-    }
+    for (const stageName of STAGE_ORDER) {
+      // Skip completed stages
+      if (state.completedStages.includes(stageName)) {
+        console.log(`Skipping completed stage: ${stageName}`);
+        continue;
+      }
 
-    // Dry-run: skip generation stages 3-5, skip assembly entirely
-    if (options.dryRun && stageName === "assembly") {
-      console.log("\n[dry-run] Skipping assembly stage.");
-      break;
-    }
-
-    state.currentStage = stageName;
-    await saveState({ state });
-
-    // Re-run stage until it completes (handles partial completions from AI agent hitting maxSteps)
-    while (!state.completedStages.includes(stageName)) {
-      // Check for interruption before each attempt
+      // Check for interruption between stages
       if (interrupted || options.abortSignal?.aborted) {
-        console.log("\nInterrupted during stage retry. Saving state...");
+        console.log("\nInterrupted between stages. Saving state...");
         state.interrupted = true;
         await saveState({ state });
         console.log("Pipeline interrupted. Resume with: storytovideo <story> --resume");
         return;
       }
 
-      try {
-        state = await stageRunners[stageName](state, options);
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        console.error(`\nError in stage ${stageName}: ${errMsg}`);
-        state.errors.push({
-          stage: stageName,
-          error: errMsg,
-          timestamp: new Date().toISOString(),
-        });
-        await saveState({ state });
-        throw error;
+      // Dry-run: skip generation stages 3-5, skip assembly entirely
+      if (options.dryRun && stageName === "assembly") {
+        console.log("\n[dry-run] Skipping assembly stage.");
+        break;
       }
 
-      if (!state.completedStages.includes(stageName)) {
-        console.log(`[${stageName}] Stage incomplete, re-running...`);
-        await saveState({ state });
+      state.currentStage = stageName;
+      await saveState({ state });
+
+      // Re-run stage until it completes (handles partial completions from AI agent hitting maxSteps)
+      while (!state.completedStages.includes(stageName)) {
+        // Check for interruption before each attempt
+        if (interrupted || options.abortSignal?.aborted) {
+          console.log("\nInterrupted during stage retry. Saving state...");
+          state.interrupted = true;
+          await saveState({ state });
+          console.log("Pipeline interrupted. Resume with: storytovideo <story> --resume");
+          return;
+        }
+
+        try {
+          state = await stageRunners[stageName](state, options);
+        } catch (error) {
+          if (error instanceof StageRollbackError) {
+            console.log(`\n[Rollback] ${error.message}`);
+            console.log(`[Rollback] Restarting pipeline from ${error.targetStage}`);
+            rolledBack = true;
+            break; // break inner while loop
+          }
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.error(`\nError in stage ${stageName}: ${errMsg}`);
+          state.errors.push({
+            stage: stageName,
+            error: errMsg,
+            timestamp: new Date().toISOString(),
+          });
+          await saveState({ state });
+          throw error;
+        }
+
+        if (rolledBack) break; // break inner while after StageRollbackError
+
+        if (!state.completedStages.includes(stageName)) {
+          console.log(`[${stageName}] Stage incomplete, re-running...`);
+          await saveState({ state });
+        }
       }
-    }
 
-    delete state.pendingStageInstructions[stageName];
+      if (rolledBack) break; // break the for loop to restart from beginning
 
-    const shouldPauseForReview =
-      Boolean(options.reviewMode) && stageName !== "assembly";
-    if (shouldPauseForReview) {
-      state.awaitingUserReview = true;
-      state.continueRequested = false;
-    }
+      delete state.pendingStageInstructions[stageName];
 
-    // Save state between stages
-    await saveState({ state });
+      const shouldPauseForReview =
+        Boolean(options.reviewMode) && stageName !== "assembly";
+      if (shouldPauseForReview) {
+        state.awaitingUserReview = true;
+        state.continueRequested = false;
+      }
 
-    if (shouldPauseForReview) {
-      console.log(
-        `\nPaused after ${stageName}. Awaiting user review before ${state.currentStage}.`,
-      );
-      return;
-    }
+      // Save state between stages
+      await saveState({ state });
 
-    // After shot_planning in dry-run mode, save analysis and stop
-    if (options.dryRun && stageName === "shot_planning") {
-      if (state.storyAnalysis) {
-        const analysisPath = join(options.outputDir, "story_analysis.json");
-        writeFileSync(analysisPath, JSON.stringify(state.storyAnalysis, null, 2));
-        console.log(`\n[dry-run] Shot plan saved to ${analysisPath}`);
+      if (shouldPauseForReview) {
+        console.log(
+          `\nPaused after ${stageName}. Awaiting user review before ${state.currentStage}.`,
+        );
+        return;
+      }
 
-        // Log shot plan summary
-        const allShots = state.storyAnalysis.scenes.flatMap((s) => s.shots || []);
-        console.log(`\n=== Shot Plan Summary ===`);
-        console.log(`Title: ${state.storyAnalysis.title}`);
-        console.log(`Art Style: ${state.storyAnalysis.artStyle}`);
-        console.log(`Characters: ${state.storyAnalysis.characters.map((c) => c.name).join(", ")}`);
-        console.log(`Locations: ${state.storyAnalysis.locations.map((l) => l.name).join(", ")}`);
-        console.log(`Scenes: ${state.storyAnalysis.scenes.length}`);
-        console.log(`Total shots: ${allShots.length}`);
-        for (const scene of state.storyAnalysis.scenes) {
-          console.log(`\n  Scene ${scene.sceneNumber}: ${scene.title}`);
-          for (const shot of scene.shots || []) {
-            console.log(`    Shot ${shot.shotNumber}: ${shot.composition} (${shot.shotType}, ${shot.durationSeconds}s)`);
-            if (shot.dialogue) {
-              console.log(`      Dialogue: "${shot.dialogue.substring(0, 60)}${shot.dialogue.length > 60 ? "..." : ""}"`);
+      // After shot_planning in dry-run mode, save analysis and stop
+      if (options.dryRun && stageName === "shot_planning") {
+        if (state.storyAnalysis) {
+          const analysisPath = join(options.outputDir, "story_analysis.json");
+          writeFileSync(analysisPath, JSON.stringify(state.storyAnalysis, null, 2));
+          console.log(`\n[dry-run] Shot plan saved to ${analysisPath}`);
+
+          // Log shot plan summary
+          const allShots = state.storyAnalysis.scenes.flatMap((s) => s.shots || []);
+          console.log(`\n=== Shot Plan Summary ===`);
+          console.log(`Title: ${state.storyAnalysis.title}`);
+          console.log(`Art Style: ${state.storyAnalysis.artStyle}`);
+          console.log(`Characters: ${state.storyAnalysis.characters.map((c) => c.name).join(", ")}`);
+          console.log(`Locations: ${state.storyAnalysis.locations.map((l) => l.name).join(", ")}`);
+          console.log(`Scenes: ${state.storyAnalysis.scenes.length}`);
+          console.log(`Total shots: ${allShots.length}`);
+          for (const scene of state.storyAnalysis.scenes) {
+            console.log(`\n  Scene ${scene.sceneNumber}: ${scene.title}`);
+            for (const shot of scene.shots || []) {
+              console.log(`    Shot ${shot.shotNumber}: ${shot.composition} (${shot.shotType}, ${shot.durationSeconds}s)`);
+              if (shot.dialogue) {
+                console.log(`      Dialogue: "${shot.dialogue.substring(0, 60)}${shot.dialogue.length > 60 ? "..." : ""}"`);
+              }
             }
           }
         }
+        console.log("\n[dry-run] Pipeline complete. Generation stages skipped.");
+        return;
       }
-      console.log("\n[dry-run] Pipeline complete. Generation stages skipped.");
-      return;
     }
+
+    if (!rolledBack) break; // all stages completed normally, exit outer loop
   }
 
   console.log("\n=== Pipeline Complete ===");
